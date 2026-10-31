@@ -46,6 +46,14 @@ impl Screen {
     }
 }
 
+/// The SysEx messages in a buffer, one by one (F0 … F7 each), whatever else is around them.
+pub fn messages(buffer: &[u8]) -> impl Iterator<Item = &[u8]> {
+    buffer.split_inclusive(|&b| b == 0xf7).filter_map(|part| {
+        let start = part.iter().position(|&b| b == 0xf0)?;
+        (part.last() == Some(&0xf7)).then(|| &part[start..])
+    })
+}
+
 /// RGB565 to 8-bit red, green, blue.
 pub fn rgb(c: u16) -> [u8; 3] {
     let (r, g, b) = ((c >> 11) & 31, (c >> 5) & 63, c & 31);
@@ -88,6 +96,14 @@ mod tests {
         assert!(!s.apply(&HELLO));
         assert!(!s.apply(&[0xf0, 0x7d, b'F', b'M', 2, 0, 0, 0, 0, 0xf7]));
         assert!(!s.apply(&encode(240, 0, &[1, 2, 3])));
+    }
+
+    #[test]
+    fn glued_messages_come_apart() {
+        let glued = [0xf0, 1, 2, 0xf7, 0xf0, 3, 0xf7];
+        let all: Vec<&[u8]> = messages(&glued).collect();
+        assert_eq!(all, vec![&[0xf0, 1, 2, 0xf7][..], &[0xf0, 3, 0xf7][..]]);
+        assert_eq!(messages(&HELLO).count(), 1);
     }
 
     #[test]

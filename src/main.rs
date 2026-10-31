@@ -102,11 +102,48 @@ struct Shared {
 struct Link {
     name: String,
     _input: MidiInputConnection<()>,
-    output: MidiOutputConnection,
     opened: Instant,
-    asked_all: bool,
-    asked_identity: bool,
-    asked_build: bool,
+    /// Stops the hello thread when the link is dropped.
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    /// Set by the hello thread when the FM-1 has gone away.
+    lost: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Keeps asking the FM-1 for its screen about once a second (the whole screen the first time:
+/// someone else may be keeping the mirror on), and after a couple of seconds which firmware
+/// it runs and which build, one question at a time (its updater drops a second one sent
+/// straight after). On a thread of its own: macOS stops redrawing a window that's hidden behind
+/// others, and the FM-1 stops sending three seconds after the last hello.
+fn hellos(mut output: MidiOutputConnection, stop: Arc<std::sync::atomic::AtomicBool>, lost: Arc<std::sync::atomic::AtomicBool>) {
+    use std::sync::atomic::Ordering;
+    let opened = Instant::now();
+    let (mut asked_identity, mut asked_build, mut first) = (false, false, true);
+    let mut hello_at: Option<Instant> = None;
+    while !stop.load(Ordering::Relaxed) {
+        if hello_at.is_none_or(|t| t.elapsed() >= HELLO_EVERY) {
+            hello_at = Some(Instant::now());
+            if output.send(if first { &HELLO_ALL } else { &HELLO }).is_err() {
+                lost.store(true, Ordering::Relaxed);
+                return;
+            }
+            first = false;
+        }
+        if !asked_identity && opened.elapsed() > Duration::from_secs(2) {
+            asked_identity = true;
+            let _ = output.send(&install::frame(17, &[]));
+        }
+        if !asked_build && opened.elapsed() > Duration::from_secs(3) {
+            asked_build = true;
+            let _ = output.send(&install::frame(49, &[]));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// The FM-1's MIDI port: "FM1 Community" with Open firmware, "USB Composite Device" with the
@@ -129,7 +166,6 @@ struct App {
     /// For seeing whether the FM-1 is still plugged in.
     scanner: Option<MidiOutput>,
     looked: Option<Instant>,
-    hello_at: Option<Instant>,
     look: Look,
     full_screen: bool,
     texture: Option<TextureHandle>,
@@ -189,7 +225,6 @@ impl App {
             link: None,
             scanner: MidiOutput::new(APP_NAME).ok(),
             looked: None,
-            hello_at: None,
             look: Look::ALL.into_iter().find(|l| saved["look"] == l.key()).unwrap_or(Look::Color),
             full_screen: false,
             texture: None,
@@ -223,42 +258,17 @@ impl App {
             self.looked = Some(now);
             if let Some(link) = &self.link {
                 let still_there = self.scanner.as_ref().is_some_and(|o| o.ports().iter().any(|p| o.port_name(p).is_ok_and(|n| n == link.name)));
-                if !still_there {
+                if !still_there || link.lost.load(std::sync::atomic::Ordering::Relaxed) {
                     self.link = None;
                 }
             }
             if self.link.is_none() {
-                self.link = open(self.shared.clone(), ctx.clone());
-                self.hello_at = None;
-            }
-        }
-        if let Some(link) = &mut self.link {
-            if self.hello_at.is_none_or(|t| now - t >= HELLO_EVERY) {
-                self.hello_at = Some(now);
-                // The first time, ask for the whole screen: someone else may be keeping the mirror on.
-                let hello = if link.asked_all { HELLO } else { HELLO_ALL };
-                link.asked_all = true;
-                if link.output.send(&hello).is_err() {
-                    self.link = None;
-                }
-            }
-        }
-        // After a couple of seconds, ask which firmware it runs and which build (for what to
-        // say when there's no screen, and to offer a newer Big Screen when there is).
-        if let Some(link) = &mut self.link {
-            if !link.asked_identity && link.opened.elapsed() > Duration::from_secs(2) {
-                link.asked_identity = true;
                 {
                     let mut s = self.shared.lock().unwrap();
                     s.identity = None;
                     s.build = None;
                 }
-                let _ = link.output.send(&install::frame(17, &[]));
-            }
-            // One question at a time: the FM-1's updater drops a second one sent straight after.
-            if !link.asked_build && link.opened.elapsed() > Duration::from_secs(3) {
-                link.asked_build = true;
-                let _ = link.output.send(&install::frame(49, &[]));
+                self.link = open(self.shared.clone(), ctx.clone());
             }
         }
         ctx.request_repaint_after(HELLO_EVERY);
@@ -465,8 +475,10 @@ fn open(shared: Arc<Mutex<Shared>>, ctx: egui::Context) -> Option<Link> {
         .connect(
             in_port,
             "FM-1 Mirror in",
-            move |_, m, _| {
+            move |_, buffer, _| {
                 let mut s = shared.lock().unwrap();
+                // macOS can deliver several SysEx messages in one buffer: take them one by one.
+                for m in screen::messages(buffer) {
                 match install::parse(m) {
                     Some((17, id)) if id.len() == 27 => {
                         s.identity = Some(String::from_utf8_lossy(&id).trim_end_matches('\0').to_string());
@@ -483,11 +495,16 @@ fn open(shared: Arc<Mutex<Shared>>, ctx: egui::Context) -> Option<Link> {
                     s.changed = true;
                     ctx.request_repaint();
                 }
+                }
             },
             (),
         )
         .ok()?;
-    Some(Link { name, _input: input, output, opened: Instant::now(), asked_all: false, asked_identity: false, asked_build: false })
+    let stop: Arc<std::sync::atomic::AtomicBool> = Arc::default();
+    let lost: Arc<std::sync::atomic::AtomicBool> = Arc::default();
+    let (st, lo) = (stop.clone(), lost.clone());
+    std::thread::spawn(move || hellos(output, st, lo));
+    Some(Link { name, _input: input, opened: Instant::now(), stop, lost })
 }
 
 /// The biggest square that fits in `area`, in its middle.

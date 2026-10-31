@@ -159,9 +159,12 @@ impl Link {
         let replies: Arc<Mutex<VecDeque<(u8, Vec<u8>)>>> = Arc::default();
         let r = replies.clone();
         let input = input
-            .connect(&ip, "in", move |_, m, _| {
-                if let Some(p) = parse(m) {
-                    r.lock().unwrap().push_back(p);
+            .connect(&ip, "in", move |_, buffer, _| {
+                // macOS can deliver several SysEx messages in one buffer: take them one by one.
+                for m in crate::screen::messages(buffer) {
+                    if let Some(p) = parse(m) {
+                        r.lock().unwrap().push_back(p);
+                    }
                 }
             }, ())
             .ok()?;
@@ -403,5 +406,17 @@ mod tests {
         let payload: Vec<u8> = (0..200).map(|i| i as u8).collect();
         assert_eq!(parse(&frame(48, &payload)), Some((48, payload)));
         assert_eq!(parse(&frame(17, &[])), Some((17, vec![])));
+    }
+}
+
+#[cfg(test)]
+mod real_replies {
+    /// A capability reply captured from an FM-1 running Big Screen.
+    #[test]
+    fn capability_reply_parses() {
+        let m = [240, 0, 50, 69, 121, 2, 0, 0, 35, 77, 6, 69, 9, 112, 0, 64, 0, 0, 4, 0, 0, 0, 2, 64, 122, 50, 80, 14, 106, 24, 88, 26, 113, 24, 66, 14, 41, 104, 93, 43, 87, 116, 37, 63, 65, 16, 118, 46, 117, 39, 55, 90, 79, 65, 123, 13, 8, 22, 124, 53, 7, 96, 7, 247];
+        let (c, d) = super::parse(&m).expect("parses");
+        assert_eq!((c, d.len()), (49, 47));
+        assert_eq!(&d[..4], b"FMC1");
     }
 }
