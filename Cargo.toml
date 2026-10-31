@@ -1,0 +1,11 @@
+[package]
+name = "fm1-mirror"
+version = "1.0.0"
+edition = "2021"
+description = "Shows the M-VAVE FM-1's screen big, sent over USB by the FM-1 Big Screen firmware"
+
+[dependencies]
+eframe = "=0.31.1"
+midir = "0.10"
+serde_json = "1"
+dirs = "5"
