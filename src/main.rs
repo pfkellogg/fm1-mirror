@@ -1,3 +1,4 @@
+#![cfg_attr(windows, windows_subsystem = "windows")] // no console window on Windows
 //! FM-1 Mirror: the M-VAVE FM-1's screen, big, on the Mac.
 //!
 //! With the FM-1 Big Screen firmware, the FM-1 sends its screen over its USB MIDI connection
@@ -5,6 +6,7 @@
 //! pixel-sharp, in colour or in high-contrast looks for reading. The buttons hide after a few
 //! seconds so the screen is as big as it can be: move the mouse to bring them back.
 
+mod install;
 mod screen;
 
 use std::path::PathBuf;
@@ -90,6 +92,10 @@ struct Shared {
     /// When the last screen message came, and whether there's a new one to show.
     last: Option<Instant>,
     changed: bool,
+    /// What the FM-1 said it is when asked ("FM-1_015", "FM-1_8000014"…).
+    identity: Option<String>,
+    /// The firmware build it reports (updater capability), to offer a newer Big Screen.
+    build: Option<String>,
 }
 
 /// The FM-1's USB MIDI ports, open both ways.
@@ -99,13 +105,18 @@ struct Link {
     output: MidiOutputConnection,
     opened: Instant,
     asked_all: bool,
+    asked_identity: bool,
+    asked_build: bool,
 }
 
 /// The FM-1's MIDI port: "FM1 Community" with Open firmware, "USB Composite Device" with the
-/// original (which has no mirror, but is worth recognising to say so).
+/// original on a Mac (which has no mirror, but is worth recognising to say so). On Windows, close
+/// other apps using the FM-1 first: there a MIDI port can only be open in one app at a time.
 fn is_fm1(name: &str) -> bool {
     let n = name.to_lowercase();
-    (n.contains("fm1") || n.contains("fm-1") || n.contains("usb composite")) && !n.contains("bridge")
+    // Windows may list it as just "USB-Midi" (a keyboard's "… (USB MIDI)" doesn't count).
+    (n.contains("fm1") || n.contains("fm-1") || n.contains("usb composite") || n.starts_with("usb-midi") || n.starts_with("usb midi"))
+        && !n.contains("bridge")
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -123,6 +134,33 @@ struct App {
     full_screen: bool,
     texture: Option<TextureHandle>,
     last_move: Instant,
+    /// Installing the Big Screen firmware: how it's going.
+    install: Option<Arc<Mutex<install::Progress>>>,
+    /// "Install Big Screen…" was clicked: the last check before it starts.
+    confirming: bool,
+}
+
+/// Why there's no picture yet.
+enum Need {
+    Plug,
+    Connecting,
+    /// M-VAVE's original firmware: first M-VAVE's Official Open (on M-VAVE's page), then this app.
+    Original,
+    /// M-VAVE's Open firmware without the mirror: this app can install Big Screen.
+    Open,
+    Other(String),
+    Unknown(String),
+}
+
+const WORKBENCH: &str = "https://open.m-vave.com/fm1-workbench";
+
+fn open_url(url: &str) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
 impl App {
@@ -156,6 +194,8 @@ impl App {
             full_screen: false,
             texture: None,
             last_move: Instant::now(),
+            install: None,
+            confirming: false,
         }
     }
 
@@ -170,6 +210,15 @@ impl App {
         // Look every two seconds, with the one client: making CoreMIDI clients on every frame
         // swamped the MIDI server so that no hello got through to the FM-1.
         let now = Instant::now();
+        // While installing, the installer has the FM-1 to itself; afterwards, start afresh.
+        if let Some(p) = &self.install {
+            let p = p.lock().unwrap();
+            if !(p.done || p.error.is_some()) {
+                self.link = None;
+                ctx.request_repaint_after(Duration::from_millis(200));
+                return;
+            }
+        }
         if self.looked.is_none_or(|t| now - t >= Duration::from_secs(2)) {
             self.looked = Some(now);
             if let Some(link) = &self.link {
@@ -194,6 +243,24 @@ impl App {
                 }
             }
         }
+        // After a couple of seconds, ask which firmware it runs and which build (for what to
+        // say when there's no screen, and to offer a newer Big Screen when there is).
+        if let Some(link) = &mut self.link {
+            if !link.asked_identity && link.opened.elapsed() > Duration::from_secs(2) {
+                link.asked_identity = true;
+                {
+                    let mut s = self.shared.lock().unwrap();
+                    s.identity = None;
+                    s.build = None;
+                }
+                let _ = link.output.send(&install::frame(17, &[]));
+            }
+            // One question at a time: the FM-1's updater drops a second one sent straight after.
+            if !link.asked_build && link.opened.elapsed() > Duration::from_secs(3) {
+                link.asked_build = true;
+                let _ = link.output.send(&install::frame(49, &[]));
+            }
+        }
         ctx.request_repaint_after(HELLO_EVERY);
     }
 
@@ -214,24 +281,131 @@ impl App {
         }
     }
 
-    /// What's wrong, in words, if there's no picture.
-    fn waiting(&self) -> Option<String> {
-        let last = self.shared.lock().unwrap().last;
-        let Some(link) = &self.link else {
-            return Some("Waiting for the FM-1…\n\nPlug it into this Mac with its USB cable and turn it on.".into());
+    /// Why there's no picture, if there isn't one.
+    fn need(&self) -> Option<Need> {
+        let (last, identity) = {
+            let s = self.shared.lock().unwrap();
+            (s.last, s.identity.clone())
         };
+        let Some(link) = &self.link else { return Some(Need::Plug) };
         // The FM-1 only sends what changes, so a still screen is quiet: once it has come, keep it.
         if last.is_some_and(|t| t >= link.opened) {
             return None;
         }
         if link.opened.elapsed() < QUIET {
-            return Some("Connecting to the FM-1…".into());
+            return Some(Need::Connecting);
         }
-        Some(if link.name.to_lowercase().contains("usb composite") {
-            "This FM-1 has its original firmware, which can't send its screen.\n\nIt needs the FM-1 Big Screen firmware.".into()
-        } else {
-            format!("Connected to \"{}\", but it isn't sending its screen.\n\nIt needs the FM-1 Big Screen firmware.", link.name)
+        Some(match identity {
+            Some(id) if id.starts_with("FM-1_0") => Need::Original,
+            Some(id) if install::is_open_firmware(&id) => Need::Open,
+            Some(id) => Need::Other(id),
+            None if link.name.to_lowercase().contains("usb composite") => Need::Original,
+            None => Need::Unknown(link.name.clone()),
         })
+    }
+
+    /// Instead of the screen: what to do, step by step, in big type.
+    fn need_panel(&mut self, ui: &mut egui::Ui, need: Need) {
+        let body = |ui: &mut egui::Ui, t: &str| {
+            ui.label(egui::RichText::new(t).size(24.0));
+        };
+        let heading = |ui: &mut egui::Ui, t: &str| {
+            ui.label(egui::RichText::new(t).size(34.0).strong().color(Color32::WHITE));
+        };
+        let step1 = |ui: &mut egui::Ui| {
+            body(ui, "Step 1 · On M-VAVE's FM1 Workbench page (in Chrome or Edge), put M-VAVE's free Official Open firmware on it: Device update → Recovery & force update → tick \"Force flash\" → Connect device → tick \"I have backed up…\" → Force flash. It replaces the FM-1's sounds with M-VAVE's: if you made your own, save them first on the page's Projects & sounds tab.");
+            if ui.button("Open M-VAVE's page").clicked() {
+                open_url(WORKBENCH);
+            }
+            body(ui, "Step 2 · Come back to this window: it will offer to install Big Screen.");
+        };
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.set_max_width(820.0);
+            ui.add_space(30.0);
+            if let Some(progress) = self.install.clone() {
+                let p = progress.lock().unwrap().clone();
+                if let Some(e) = p.error {
+                    heading(ui, "The install stopped");
+                    body(ui, &format!("{}{}.", e[..1].to_uppercase(), &e[1..]));
+                    body(ui, "Leave the FM-1 plugged in and on, and click Try again. M-VAVE's page can also always install firmware on it (Device update).");
+                    ui.horizontal(|ui| {
+                        if ui.button("Try again").clicked() {
+                            self.start_install();
+                        }
+                        if ui.button("Close").clicked() {
+                            self.install = None;
+                        }
+                    });
+                    return;
+                }
+                if !p.done {
+                    heading(ui, "Installing Big Screen…");
+                    body(ui, &p.step);
+                    ui.add(egui::ProgressBar::new(p.percent as f32 / 100.0).show_percentage().desired_height(36.0));
+                    body(ui, "Keep the FM-1 plugged in and on. It restarts by itself at the end (about 2 minutes in all).");
+                    return;
+                }
+                heading(ui, "Big Screen is installed");
+                body(ui, "The FM-1 is coming back; its screen will appear here.");
+                return;
+            }
+            match need {
+                Need::Plug => {
+                    heading(ui, "Waiting for the FM-1…");
+                    body(ui, "Plug it into this computer with its USB cable and turn it on.");
+                }
+                Need::Connecting => heading(ui, "Connecting to the FM-1…"),
+                Need::Original => {
+                    heading(ui, "This FM-1 has M-VAVE's original firmware");
+                    body(ui, "To show its screen here it needs the FM-1 Big Screen firmware: M-VAVE's free Official Open firmware plus one small addition that sends the screen to this app. Two steps, and you can go back to the original whenever you like.");
+                    step1(ui);
+                }
+                Need::Open => {
+                    heading(ui, "This FM-1 runs M-VAVE's Open firmware");
+                    body(ui, "Install the Big Screen version of it: the same firmware, plus sending its screen to this app. It takes about 2 minutes.");
+                    if self.confirming {
+                        body(ui, "Ready? Keep the FM-1 plugged in and on until it's done, and close other apps that use it (on Windows only one app can use it at a time). If you made your own sounds or projects, saving them first on M-VAVE's page is always a good idea.");
+                        ui.horizontal(|ui| {
+                            if ui.button("Install now").clicked() {
+                                self.confirming = false;
+                                self.start_install();
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.confirming = false;
+                            }
+                        });
+                    } else if ui.button("Install Big Screen…").clicked() {
+                        self.confirming = true;
+                    }
+                }
+                Need::Other(id) => {
+                    heading(ui, "This FM-1 runs another firmware");
+                    body(ui, &format!("It says it is \"{id}\". Big Screen installs over M-VAVE's Official Open firmware, so that comes first."));
+                    step1(ui);
+                }
+                Need::Unknown(name) => {
+                    heading(ui, "No screen from the FM-1 yet");
+                    body(ui, &format!("Connected to \"{name}\", but it isn't sending its screen and didn't say which firmware it runs. With M-VAVE's original firmware:"));
+                    step1(ui);
+                }
+            }
+            ui.add_space(24.0);
+            ui.label(
+                egui::RichText::new(
+                    "Going back is easy: on M-VAVE's page, Device update → Start update puts back M-VAVE's own Official Open firmware, and Recovery & force update → Restore original V15 the firmware it came with.",
+                )
+                .size(20.0)
+                .color(Color32::GRAY),
+            );
+        });
+    }
+
+    fn start_install(&mut self) {
+        let progress: Arc<Mutex<install::Progress>> = Arc::default();
+        self.install = Some(progress.clone());
+        self.link = None; // the installer has the FM-1 to itself
+        self.shared.lock().unwrap().last = None;
+        std::thread::spawn(move || install::install(progress));
     }
 
     fn buttons(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -249,6 +423,22 @@ impl App {
             if ui.button(if self.full_screen { "Leave full screen" } else { "Full screen" }).clicked() {
                 self.full_screen = !self.full_screen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.full_screen));
+            }
+            // A Big Screen FM-1 on another build than the one in this app: offer it.
+            let other_build = self.shared.lock().unwrap().build.clone().filter(|b| *b != install::build_id());
+            let showing = self.shared.lock().unwrap().last.is_some();
+            if showing && other_build.is_some() && self.install.is_none() {
+                if self.confirming {
+                    if ui.button("Install now (keep the FM-1 plugged in)").clicked() {
+                        self.confirming = false;
+                        self.start_install();
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.confirming = false;
+                    }
+                } else if ui.button("Update the FM-1's Big Screen firmware…").clicked() {
+                    self.confirming = true;
+                }
             }
             let status = match &self.link {
                 Some(l) => format!("FM-1: {}", l.name),
@@ -277,6 +467,17 @@ fn open(shared: Arc<Mutex<Shared>>, ctx: egui::Context) -> Option<Link> {
             "FM-1 Mirror in",
             move |_, m, _| {
                 let mut s = shared.lock().unwrap();
+                match install::parse(m) {
+                    Some((17, id)) if id.len() == 27 => {
+                        s.identity = Some(String::from_utf8_lossy(&id).trim_end_matches('\0').to_string());
+                        ctx.request_repaint();
+                    }
+                    Some((49, cap)) if cap.len() == 47 && &cap[..4] == b"FMC1" => {
+                        s.build = Some(cap[14..46].iter().map(|b| format!("{b:02x}")).collect());
+                        ctx.request_repaint();
+                    }
+                    _ => {}
+                }
                 if s.screen.apply(m) {
                     s.last = Some(Instant::now());
                     s.changed = true;
@@ -286,7 +487,7 @@ fn open(shared: Arc<Mutex<Shared>>, ctx: egui::Context) -> Option<Link> {
             (),
         )
         .ok()?;
-    Some(Link { name, _input: input, output, opened: Instant::now(), asked_all: false })
+    Some(Link { name, _input: input, output, opened: Instant::now(), asked_all: false, asked_identity: false, asked_build: false })
 }
 
 /// The biggest square that fits in `area`, in its middle.
@@ -313,8 +514,12 @@ impl eframe::App for App {
             self.full_screen = !self.full_screen && !escape;
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.full_screen));
         }
-        let waiting = self.waiting();
-        if waiting.is_some() || self.last_move.elapsed() < BAR_FOR {
+        let need = self.need();
+        if self.install.as_ref().is_some_and(|p| p.lock().unwrap().done) && need.is_none() {
+            self.install = None; // the screen is back
+        }
+        let showing_help = need.is_some() || self.install.is_some();
+        if showing_help || self.last_move.elapsed() < BAR_FOR {
             egui::TopBottomPanel::bottom("buttons")
                 .frame(egui::Frame::new().fill(Color32::from_gray(28)).inner_margin(egui::Margin::same(14)))
                 .show(ctx, |ui| self.buttons(ui, ctx));
@@ -323,9 +528,9 @@ impl eframe::App for App {
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::BLACK)).show(ctx, |ui| {
             let area = ui.max_rect();
             let p = ui.painter();
-            if let Some(text) = waiting {
-                let g = p.layout(text, FontId::proportional(32.0), Color32::WHITE, area.width() - 80.0);
-                p.galley(area.center() - g.size() / 2.0, g, Color32::WHITE);
+            if showing_help {
+                let need = need.unwrap_or(Need::Connecting);
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(area.shrink2(vec2(40.0, 10.0))), |ui| self.need_panel(ui, need));
             } else if let Some(tex) = &self.texture {
                 p.image(tex.id(), fit(area), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
             } else {
