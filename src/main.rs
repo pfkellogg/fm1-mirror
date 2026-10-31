@@ -15,14 +15,14 @@ use eframe::egui::{self, vec2, Align2, Color32, ColorImage, FontId, Pos2, Rect, 
 use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use serde_json::{json, Value};
 
-use screen::{Screen, HELLO, SIZE};
+use screen::{Screen, HELLO, HELLO_ALL, SIZE};
 
 const APP_NAME: &str = "FM-1 Mirror";
 /// How long the buttons stay after the mouse last moved.
 const BAR_FOR: Duration = Duration::from_secs(4);
 /// How often to say hello (the FM-1 stops sending three seconds after the last one).
 const HELLO_EVERY: Duration = Duration::from_millis(900);
-/// Nothing from the FM-1 for this long while connected: it isn't sending its screen.
+/// Nothing from the FM-1 this long after connecting: it isn't sending its screen.
 const QUIET: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, PartialEq)]
@@ -98,6 +98,7 @@ struct Link {
     _input: MidiInputConnection<()>,
     output: MidiOutputConnection,
     opened: Instant,
+    asked_all: bool,
 }
 
 /// The FM-1's MIDI port: "FM1 Community" with Open firmware, "USB Composite Device" with the
@@ -114,6 +115,8 @@ fn settings_path() -> Option<PathBuf> {
 struct App {
     shared: Arc<Mutex<Shared>>,
     link: Option<Link>,
+    /// For seeing whether the FM-1 is still plugged in.
+    scanner: Option<MidiOutput>,
     looked: Option<Instant>,
     hello_at: Option<Instant>,
     look: Look,
@@ -146,6 +149,7 @@ impl App {
         App {
             shared: Arc::default(),
             link: None,
+            scanner: MidiOutput::new(APP_NAME).ok(),
             looked: None,
             hello_at: None,
             look: Look::ALL.into_iter().find(|l| saved["look"] == l.key()).unwrap_or(Look::Color),
@@ -163,24 +167,29 @@ impl App {
 
     /// Finds and opens the FM-1 (now and then while it's not there), and keeps saying hello.
     fn keep_linked(&mut self, ctx: &egui::Context) {
+        // Look every two seconds, with the one client: making CoreMIDI clients on every frame
+        // swamped the MIDI server so that no hello got through to the FM-1.
         let now = Instant::now();
-        if let Some(link) = &self.link {
-            let still_there = MidiOutput::new(APP_NAME)
-                .map(|o| o.ports().iter().any(|p| o.port_name(p).is_ok_and(|n| n == link.name)))
-                .unwrap_or(false);
-            if !still_there && self.looked.is_none_or(|t| now - t > Duration::from_secs(1)) {
-                self.link = None;
-            }
-        }
-        if self.link.is_none() && self.looked.is_none_or(|t| now - t > Duration::from_secs(2)) {
+        if self.looked.is_none_or(|t| now - t >= Duration::from_secs(2)) {
             self.looked = Some(now);
-            self.link = open(self.shared.clone(), ctx.clone());
-            self.hello_at = None;
+            if let Some(link) = &self.link {
+                let still_there = self.scanner.as_ref().is_some_and(|o| o.ports().iter().any(|p| o.port_name(p).is_ok_and(|n| n == link.name)));
+                if !still_there {
+                    self.link = None;
+                }
+            }
+            if self.link.is_none() {
+                self.link = open(self.shared.clone(), ctx.clone());
+                self.hello_at = None;
+            }
         }
         if let Some(link) = &mut self.link {
             if self.hello_at.is_none_or(|t| now - t >= HELLO_EVERY) {
                 self.hello_at = Some(now);
-                if link.output.send(&HELLO).is_err() {
+                // The first time, ask for the whole screen: someone else may be keeping the mirror on.
+                let hello = if link.asked_all { HELLO } else { HELLO_ALL };
+                link.asked_all = true;
+                if link.output.send(&hello).is_err() {
                     self.link = None;
                 }
             }
@@ -211,7 +220,8 @@ impl App {
         let Some(link) = &self.link else {
             return Some("Waiting for the FM-1…\n\nPlug it into this Mac with its USB cable and turn it on.".into());
         };
-        if last.is_some_and(|t| t.elapsed() < QUIET) {
+        // The FM-1 only sends what changes, so a still screen is quiet: once it has come, keep it.
+        if last.is_some_and(|t| t >= link.opened) {
             return None;
         }
         if link.opened.elapsed() < QUIET {
@@ -276,7 +286,7 @@ fn open(shared: Arc<Mutex<Shared>>, ctx: egui::Context) -> Option<Link> {
             (),
         )
         .ok()?;
-    Some(Link { name, _input: input, output, opened: Instant::now() })
+    Some(Link { name, _input: input, output, opened: Instant::now(), asked_all: false })
 }
 
 /// The biggest square that fits in `area`, in its middle.

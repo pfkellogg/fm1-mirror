@@ -1,11 +1,14 @@
 //! The FM-1's screen as the Big Screen firmware sends it over USB MIDI.
 //!
-//! The computer says hello (F0 7D 'F' 'S' 00 F7) about once a second; while it does, the FM-1
-//! sends every row it paints as F0 7D 'F' 'S' 01, the row and first column (two 7-bit bytes
-//! each), then runs of four bytes: a count, and the RGB565 colour in 7, 7 and 2 bits.
+//! The computer says hello (F0 7D 'F' 'S' 00 F7, or 01 to have the whole screen sent again)
+//! about once a second; while it does, the FM-1 sends every row it paints as F0 7D 'F' 'S' 01,
+//! the row and first column (two 7-bit bytes each), then runs of four bytes: a count, and the
+//! RGB565 colour in 7, 7 and 2 bits. (Rows are at least ten bytes, hellos six.)
 
 pub const SIZE: usize = 240;
 pub const HELLO: [u8; 6] = [0xf0, 0x7d, b'F', b'S', 0, 0xf7];
+/// Hello, and send the whole screen again.
+pub const HELLO_ALL: [u8; 6] = [0xf0, 0x7d, b'F', b'S', 1, 0xf7];
 const ROW: [u8; 5] = [0xf0, 0x7d, b'F', b'S', 1];
 
 pub struct Screen {

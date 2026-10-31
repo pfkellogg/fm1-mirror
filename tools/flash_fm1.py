@@ -2,12 +2,13 @@
 # Open firmware, over USB MIDI. A port of the "tagged" update in M-VAVE's own updater
 # (fm1_open sdk/WebUpdate.js), so the FM-1 sees exactly what the workbench page sends.
 #
-#   flash_fm1.py PACKAGE.fwsc BUILD_ID [--check]
+#   flash_fm1.py PACKAGE.fwsc BUILD-IDENTITY.json [--check]
 #
-# BUILD_ID is build-identity.json's build_id; --check only inspects the package and the FM-1.
+# The build identity file comes from the same build as the package (its build_id is what the FM-1
+# reports afterwards); --check only inspects the package and the FM-1.
 # The FM-1 asks for each block itself (address + length) and the reply carries it, so there
 # is no timing to get wrong. Quit other apps that use the FM-1's MIDI first.
-import hashlib, re, sys, time, queue
+import hashlib, json, re, sys, time, queue
 import mido
 
 VENDOR_LOADER = "ef1f2db89b011fa53e71df363f0122de0ea896618c53fb53e8da676322004541"
@@ -242,7 +243,8 @@ def serve(link, image, finish, idle, phase):
 
 
 def main():
-    package, build_id = sys.argv[1], sys.argv[2].lower()
+    package = sys.argv[1]
+    build_id = json.load(open(sys.argv[2]))["build_id"].lower()
     only_check = "--check" in sys.argv
     data = open(package, "rb").read()
     product, image, loader = inspect_package(data)
