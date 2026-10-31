@@ -1,0 +1,64 @@
+name: build
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: mac
+          - os: windows-latest
+            name: windows
+          - os: ubuntu-22.04
+            name: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - if: matrix.name == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - run: cargo test
+      - if: matrix.name == 'mac'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          sed -i '' '/\/Applications/d' make_app.sh
+          ./make_app.sh
+          cd dist && ditto -c -k --keepParent "FM-1 Mirror.app" ../FM-1-Mirror-mac.zip
+      - if: matrix.name == 'windows'
+        run: |
+          cargo build --release
+          copy target\release\fm1-mirror.exe FM-1-Mirror-windows.exe
+      - if: matrix.name == 'linux'
+        run: |
+          cargo build --release
+          cp target/release/fm1-mirror FM-1-Mirror-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fm1-mirror-${{ matrix.name }}
+          path: FM-1-Mirror-*
+
+  # On a v* tag: put the downloads on a GitHub Release for that tag.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l
+          gh release create "${{ github.ref_name }}" FM-1-Mirror-* --repo "${{ github.repository }}" \
+            --title "FM-1 Mirror ${{ github.ref_name }}" --notes-file - <<'NOTES'
+          The M-VAVE FM-1's screen, big, on Mac, Windows and Linux. See the README for setting up the
+          FM-1 (two steps, and how to go back). Contact: pfkellogg@gmail.com
+          NOTES
