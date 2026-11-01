@@ -14,13 +14,17 @@ Free, for **Mac, Windows and Linux**. Questions, or something not working? Write
 
 ## Download
 
-From the [latest release](../../releases/latest):
+Click the file for your computer. These links always give the newest version:
 
 | Computer | File | First time you open it |
 |---|---|---|
-| Mac (Apple silicon and Intel) | `FM-1-Mirror-mac.zip` | Unzip, drag **FM-1 Mirror** to Applications and open it. It isn't from the App Store, so the first time macOS may refuse: open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to FM-1 Mirror. |
-| Windows 10 and 11 | `FM-1-Mirror-windows.exe` | Double-click. If Windows says "protected your PC", click **More info → Run anyway**. |
-| Linux | `FM-1-Mirror-linux` | `chmod +x FM-1-Mirror-linux` and run it. |
+| Mac (Apple silicon and Intel) | [**FM-1-Mirror-mac.zip**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-mac.zip) | Double-click the zip to unzip it, drag **FM-1 Mirror** (the app, with the FM-1 Mirror name) to Applications and open it. It isn't from the App Store, so the first time macOS may refuse: open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to FM-1 Mirror. |
+| Windows 10 and 11 | [**FM-1-Mirror-windows.exe**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-windows.exe) | Double-click. If Windows says "protected your PC", click **More info → Run anyway**. |
+| Linux | [**FM-1-Mirror-linux**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-linux) | `chmod +x FM-1-Mirror-linux` and run it. |
+
+> **Not the green "Code" button.** GitHub's green **Code → Download ZIP** button at the top of this
+> page gives the app's source code (a folder called `fm1-mirror-master`), which doesn't run. Use the
+> links above, or **Releases** on the right of the page.
 
 Plug the FM-1 into the computer with a USB **data** cable (some cables only charge), turn it on, and
 open FM-1 Mirror.
