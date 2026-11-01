@@ -2,14 +2,14 @@
 
 The M-VAVE FM-1 is a wonderful little FM synth, but its screen is only 1.54 inches across. If your
 eyes aren't what they were, it's hard to read. **FM-1 Mirror shows the FM-1's screen on your
-computer, as big as you like**: the whole window or the whole monitor, sharp, in colour, or in
+computer, tablet or phone, as big as you like**: the whole window or the whole monitor, sharp, in colour, or in
 high-contrast looks such as yellow on black.
 
 It's live. Turn a knob, press a button, play a note, and the big screen changes with the little one.
 
 ![The FM-1's screen in FM-1 Mirror](docs/big-screen.png)
 
-Free, for **Mac, Windows and Linux**. Questions, or something not working? Write to me:
+Free, for **Mac, Windows, Linux and Android**. Questions, or something not working? Write to me:
 **pfkellogg@gmail.com**
 
 ## Download
@@ -21,6 +21,7 @@ Click the file for your computer. These links always give the newest version:
 | Mac (Apple silicon and Intel) | [**FM-1-Mirror-mac.zip**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-mac.zip) | Double-click the zip to unzip it, drag **FM-1 Mirror** (the app, with the FM-1 Mirror name) to Applications and open it. It isn't from the App Store, so the first time macOS may refuse: open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to FM-1 Mirror. |
 | Windows 10 and 11 | [**FM-1-Mirror-windows.exe**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-windows.exe) | Double-click. If Windows says "protected your PC", click **More info → Run anyway**. |
 | Linux | [**FM-1-Mirror-linux**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-linux) | `chmod +x FM-1-Mirror-linux` and run it. |
+| Android 11 or newer (tablet or phone) | [**FM-1-Mirror-android.apk**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-android.apk) | Open the link on the tablet or phone and tap the file when it has downloaded. It isn't from Google Play, so Android asks first: allow your browser to **install unknown apps**, then tap **Install**. |
 
 > **Not the green "Code" button.** GitHub's green **Code → Download ZIP** button at the top of this
 > page gives the app's source code (a folder called `fm1-mirror-master`), which doesn't run. Use the
@@ -28,6 +29,10 @@ Click the file for your computer. These links always give the newest version:
 
 Plug the FM-1 into the computer with a USB **data** cable (some cables only charge), turn it on, and
 open FM-1 Mirror.
+
+**On Android** the FM-1 plugs into the tablet or phone's USB-C port: a USB-C to USB-C data cable, or
+the FM-1's own cable through a USB-C (OTG) adapter. The tablet powers the FM-1. Then open FM-1 Mirror.
+Tap the screen for full screen, and tap again to bring the buttons back.
 
 ## How it works, in plain words
 
@@ -68,6 +73,9 @@ firmware your FM-1 has and what to do next.
 ![Installing from FM-1 Mirror](docs/installing.png)
 
 **If your FM-1 already runs M-VAVE's Open firmware**, only step 2.
+
+**On Android**, step 2 works the same in the Android app. Step 1 is easiest on a computer: the
+workbench page needs Chrome or Edge, and then the FM-1 goes back on the tablet for step 2.
 
 Keep the FM-1 plugged in and turned on while either step runs. On Windows, close other music apps
 that use the FM-1 first (Windows lets only one app use a MIDI device at a time).
@@ -123,9 +131,14 @@ big screen** button of its own.
   [pfkellogg/fm1_open, branch `screen-out`](https://github.com/pfkellogg/fm1_open/tree/screen-out).
 - `tools/simulate_fm1.py`: a pretend FM-1 for trying the app without one;
   `tools/flash_fm1.py`: the installer as a script.
+- `android/`: the Android app, in plain Java (Android's own MIDI, no other libraries). `Codec.java`
+  is the screen and updater messages, `Installer.java` the installer, both ports of the Rust code.
+  `android/test/run.sh` checks the messages on a computer. Debug builds include a pretend FM-1
+  ("FM1 Simulator", `app/src/debug`).
 
 Build it yourself with Rust: `cargo build --release` (on Linux, install `libasound2-dev` first);
-on a Mac, `./make_app.sh` makes the app.
+on a Mac, `./make_app.sh` makes the app. The Android app: `cd android && ./gradlew assembleDebug`
+(Java 17 and the Android SDK).
 
 ## Thanks
 
