@@ -84,8 +84,21 @@ whenever you like, the same way as step 1:
   → **Restore original V15** → Connect device → tick **I have backed up…** → **Install original V15**.
   That also puts back the 128 factory sounds.
 
-If an update is ever interrupted (a cable pulled out, the computer asleep), do what M-VAVE's page
-says: plug the FM-1 back in and run the same step again.
+If an update is ever interrupted (a cable pulled out, the computer asleep, the computer losing the
+FM-1 while it restarts into its updater), nothing is broken: the FM-1 waits in its updater for the
+rest of the firmware. Plug it back in if it came out and open FM-1 Mirror: it says **The FM-1 is
+waiting in its updater** and **Finish installing Big Screen** carries on from there. M-VAVE's page,
+or M-Upgrade, can finish it too.
+
+If the computer keeps losing the FM-1 during Step 2:
+
+- Close every other app that uses the FM-1 first (a DAW, Synth Spyglass, M-VAVE's page in a browser
+  tab). On Windows only one app can use it at a time, and the FM-1 reappears under a new name partway
+  through the update, so another app can grab it.
+- Plug the FM-1 straight into the computer, not through a hub, with a USB data cable.
+
+Coming from M-VAVE's V16 firmware is fine: Step 1 replaces it completely, so there's no need to go
+back to V15 first.
 
 ## Using FM-1 Mirror
 

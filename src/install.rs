@@ -257,6 +257,11 @@ fn find(want: Option<&str>, updater: bool, wait: Duration) -> Result<Option<(Lin
     }
 }
 
+/// The FM-1's updater, waiting for firmware (an update stopped partway, or was started elsewhere).
+pub fn is_updater(id: &str) -> bool {
+    id.to_lowercase().starts_with("ota-")
+}
+
 pub fn is_open_firmware(id: &str) -> bool {
     id.starts_with("FM-1_8") || id == "FM1_OFFICIAL_OPEN" || id.starts_with("FM1_COMMUNITY_")
 }
@@ -281,7 +286,7 @@ fn serve(link: &mut Link, image: &[u8], finish: u32, idle: Duration, progress: &
             return Err("the update took too long".into());
         }
         if last.elapsed() > idle {
-            return Err("the FM-1 stopped asking for the firmware".into());
+            return Err("the FM-1 stopped asking for the firmware. Nothing is broken: the FM-1 keeps waiting for the rest of the update".into());
         }
         let Some((48, d)) = link.read(Duration::from_millis(250)) else { continue };
         if d.len() != 8 {
@@ -332,6 +337,9 @@ fn serve(link: &mut Link, image: &[u8], finish: u32, idle: Duration, progress: &
     }
 }
 
+/// When the FM-1 doesn't come back on USB in time: an update can always be finished.
+const LOST: &str = "the computer lost the FM-1 partway through. Nothing is broken: the FM-1 keeps waiting for the rest of the update";
+
 /// The whole install, on its own thread; `progress` says how it's going.
 pub fn install(progress: Arc<Mutex<Progress>>) {
     let set = |step: &str| {
@@ -343,32 +351,39 @@ pub fn install(progress: Arc<Mutex<Progress>>) {
         let (product, image) = inspect(PACKAGE)?;
         let build = build_id();
         set("Finding the FM-1…");
-        let (mut link, who) = find(None, false, Duration::from_secs(3))?.ok_or("no FM-1 answered. Is it plugged in and on?")?;
-        if !is_open_firmware(&who) {
-            return Err(format!("this FM-1 runs {who}, not M-VAVE's Open firmware. Install that first (see Step 1)."));
+        // The window's own link to the FM-1 lets go first (on Windows a port is one app's at a time).
+        std::thread::sleep(Duration::from_millis(400));
+        let (mut link, who) = find(None, true, Duration::from_secs(5))?.ok_or("no FM-1 answered. Is it plugged in and on?")?;
+        if is_updater(&who) {
+            // Left in its updater by an update that stopped partway: carry on from there,
+            // as M-VAVE's own page does.
+            link.send(&ENTER_LOADER)?;
+            serve(&mut link, &image, 0xf000_0000, Duration::from_secs(180), &progress, "Finishing the update: writing the firmware…")?;
+        } else {
+            if !is_open_firmware(&who) {
+                return Err(format!("this FM-1 runs {who}, not M-VAVE's Open firmware. Install that first (see Step 1)."));
+            }
+            let (family, state, current) = capability(link.query(49, &[], Duration::from_millis(1500)))?;
+            if state != 0 {
+                return Err("the FM-1 is busy with another update".into());
+            }
+            if current == build {
+                return Ok(()); // already there
+            }
+            let n = image.len() as u32;
+            let mut tag = vec![1, family, n as u8, (n >> 8) as u8, (n >> 16) as u8, (n >> 24) as u8];
+            tag.extend((0..32).map(|i| u8::from_str_radix(&build[i * 2..i * 2 + 2], 16).unwrap_or(0)));
+            if link.query(50, &tag, Duration::from_millis(1500)) != Some(vec![0]) {
+                return Err("the FM-1 didn't accept the firmware".into());
+            }
+            link.send(&ENTER_LOADER)?;
+            serve(&mut link, &image, 0xe000_0000, Duration::from_secs(10), &progress, "Preparing the FM-1's updater…")?;
+            drop(link);
+            set("Waiting for the FM-1's updater…");
+            let (mut link, _) = find(Some(LOADER_IDENTITY), true, Duration::from_secs(60))?.ok_or(LOST)?;
+            link.send(&ENTER_LOADER)?;
+            serve(&mut link, &image, 0xf000_0000, Duration::from_secs(180), &progress, "Writing the firmware…")?;
         }
-        let (family, state, current) = capability(link.query(49, &[], Duration::from_millis(1500)))?;
-        if state != 0 {
-            return Err("the FM-1 is busy with another update".into());
-        }
-        if current == build {
-            return Ok(()); // already there
-        }
-        let n = image.len() as u32;
-        let mut tag = vec![1, family, n as u8, (n >> 8) as u8, (n >> 16) as u8, (n >> 24) as u8];
-        tag.extend((0..32).map(|i| u8::from_str_radix(&build[i * 2..i * 2 + 2], 16).unwrap_or(0)));
-        if link.query(50, &tag, Duration::from_millis(1500)) != Some(vec![0]) {
-            return Err("the FM-1 didn't accept the firmware".into());
-        }
-        link.send(&ENTER_LOADER)?;
-        serve(&mut link, &image, 0xe000_0000, Duration::from_secs(10), &progress, "Preparing the FM-1's updater…")?;
-        drop(link);
-        set("Waiting for the FM-1's updater…");
-        let (mut link, _) = find(Some(LOADER_IDENTITY), true, Duration::from_secs(40))?
-            .ok_or("the FM-1's updater didn't come back. Leave it plugged in and try again.")?;
-        link.send(&ENTER_LOADER)?;
-        serve(&mut link, &image, 0xf000_0000, Duration::from_secs(180), &progress, "Writing the firmware…")?;
-        drop(link);
         set("Waiting for the FM-1 to restart…");
         let (mut link, _) = find(Some(&product), false, Duration::from_secs(40))?
             .ok_or("the FM-1 didn't come back. Turn it off and on; if it shows M-VAVE's updater, try again.")?;

@@ -152,7 +152,9 @@ fn hellos(mut output: MidiOutputConnection, stop: Arc<std::sync::atomic::AtomicB
 fn is_fm1(name: &str) -> bool {
     let n = name.to_lowercase();
     // Windows may list it as just "USB-Midi" (a keyboard's "… (USB MIDI)" doesn't count).
-    (n.contains("fm1") || n.contains("fm-1") || n.contains("usb composite") || n.starts_with("usb-midi") || n.starts_with("usb midi"))
+    // Its updater, waiting mid-update, may have a name of its own.
+    let updater = ["felucca", "sloop", "clipper", "ota", "sinco"].iter().any(|h| n.contains(h));
+    (n.contains("fm1") || n.contains("fm-1") || n.contains("usb composite") || n.starts_with("usb-midi") || n.starts_with("usb midi") || updater)
         && !n.contains("bridge")
 }
 
@@ -184,6 +186,8 @@ enum Need {
     Original,
     /// M-VAVE's Open firmware without the mirror: this app can install Big Screen.
     Open,
+    /// In its updater, waiting: an update stopped partway (this app can finish it).
+    Updater,
     Other(String),
     Unknown(String),
 }
@@ -308,6 +312,7 @@ impl App {
         Some(match identity {
             Some(id) if id.starts_with("FM-1_0") => Need::Original,
             Some(id) if install::is_open_firmware(&id) => Need::Open,
+            Some(id) if install::is_updater(&id) => Need::Updater,
             Some(id) => Need::Other(id),
             None if link.name.to_lowercase().contains("usb composite") => Need::Original,
             None => Need::Unknown(link.name.clone()),
@@ -323,7 +328,7 @@ impl App {
             ui.label(egui::RichText::new(t).size(34.0).strong().color(Color32::WHITE));
         };
         let step1 = |ui: &mut egui::Ui| {
-            body(ui, "Step 1 · On M-VAVE's FM1 Workbench page (in Chrome or Edge), put M-VAVE's free Official Open firmware on it: Device update → Recovery & force update → tick \"Force flash\" → Connect device → tick \"I have backed up…\" → Force flash. It replaces the FM-1's sounds with M-VAVE's: if you made your own, save them first on the page's Projects & sounds tab.");
+            body(ui, "Step 1 · On M-VAVE's FM1 Workbench page (in Chrome or Edge), put M-VAVE's free Official Open firmware on it: Device update › Recovery & force update › tick \"Force flash\" › Connect device › tick \"I have backed up…\" › Force flash. It replaces the FM-1's sounds with M-VAVE's: if you made your own, save them first on the page's Projects & sounds tab.");
             if ui.button("Open M-VAVE's page").clicked() {
                 open_url(WORKBENCH);
             }
@@ -337,7 +342,7 @@ impl App {
                 if let Some(e) = p.error {
                     heading(ui, "The install stopped");
                     body(ui, &format!("{}{}.", e[..1].to_uppercase(), &e[1..]));
-                    body(ui, "Leave the FM-1 plugged in and on, and click Try again. M-VAVE's page can also always install firmware on it (Device update).");
+                    body(ui, "Leave the FM-1 plugged in and on, close other apps that use it, and click Try again: it carries on where it stopped. If the FM-1 is plugged in through a hub, plug it straight into the computer. M-VAVE's page (or M-Upgrade) can also always install firmware on it.");
                     ui.horizontal(|ui| {
                         if ui.button("Try again").clicked() {
                             self.start_install();
@@ -388,6 +393,13 @@ impl App {
                         self.confirming = true;
                     }
                 }
+                Need::Updater => {
+                    heading(ui, "The FM-1 is waiting in its updater");
+                    body(ui, "An update stopped partway, so the FM-1 is waiting for the rest of its firmware. Nothing is broken. Keep it plugged in and on, close other apps that use it, and finish installing Big Screen here (about 2 minutes). M-VAVE's page can also finish it.");
+                    if ui.button("Finish installing Big Screen").clicked() {
+                        self.start_install();
+                    }
+                }
                 Need::Other(id) => {
                     heading(ui, "This FM-1 runs another firmware");
                     body(ui, &format!("It says it is \"{id}\". Big Screen installs over M-VAVE's Official Open firmware, so that comes first."));
@@ -402,7 +414,7 @@ impl App {
             ui.add_space(24.0);
             ui.label(
                 egui::RichText::new(
-                    "Going back is easy: on M-VAVE's page, Device update → Start update puts back M-VAVE's own Official Open firmware, and Recovery & force update → Restore original V15 the firmware it came with.",
+                    "Going back is easy: on M-VAVE's page, Device update › Start update puts back M-VAVE's own Official Open firmware, and Recovery & force update › Restore original V15 the firmware it came with.",
                 )
                 .size(20.0)
                 .color(Color32::GRAY),
