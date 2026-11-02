@@ -5,9 +5,16 @@
 //! while this app keeps asking for it (see screen.rs). It's drawn as large as the window allows,
 //! pixel-sharp, in colour or in high-contrast looks for reading. The buttons hide after a few
 //! seconds so the screen is as big as it can be: move the mouse to bring them back.
+//! Keys plays the FM-1 from a keyboard through the app, and the spyglass beside the screen shows
+//! what's played (keys.rs, glass.rs), as in FM-1 Mirror + Spyglass on Android.
 
+mod chord;
+mod glass;
+mod glyphs;
 mod install;
+mod keys;
 mod screen;
+mod staff;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -98,10 +105,12 @@ struct Shared {
     build: Option<String>,
 }
 
-/// The FM-1's USB MIDI ports, open both ways.
+/// The FM-1's MIDI ports (USB or Bluetooth), open both ways.
 struct Link {
     name: String,
     _input: MidiInputConnection<()>,
+    /// Shared by the hellos and Keys.
+    out: Arc<Mutex<MidiOutputConnection>>,
     opened: Instant,
     /// Stops the hello thread when the link is dropped.
     stop: Arc<std::sync::atomic::AtomicBool>,
@@ -120,7 +129,7 @@ impl Drop for Link {
 /// it runs and which build, one question at a time (its updater drops a second one sent
 /// straight after). On a thread of its own: macOS stops redrawing a window that's hidden behind
 /// others, and the FM-1 stops sending three seconds after the last hello.
-fn hellos(mut output: MidiOutputConnection, stop: Arc<std::sync::atomic::AtomicBool>, lost: Arc<std::sync::atomic::AtomicBool>) {
+fn hellos(output: Arc<Mutex<MidiOutputConnection>>, stop: Arc<std::sync::atomic::AtomicBool>, lost: Arc<std::sync::atomic::AtomicBool>) {
     use std::sync::atomic::Ordering;
     let opened = Instant::now();
     let (mut asked_identity, mut asked_build, mut first) = (false, false, true);
@@ -128,7 +137,7 @@ fn hellos(mut output: MidiOutputConnection, stop: Arc<std::sync::atomic::AtomicB
     while !stop.load(Ordering::Relaxed) {
         if hello_at.is_none_or(|t| t.elapsed() >= HELLO_EVERY) {
             hello_at = Some(Instant::now());
-            if output.send(if first { &HELLO_ALL } else { &HELLO }).is_err() {
+            if output.lock().unwrap().send(if first { &HELLO_ALL } else { &HELLO }).is_err() {
                 lost.store(true, Ordering::Relaxed);
                 return;
             }
@@ -136,11 +145,11 @@ fn hellos(mut output: MidiOutputConnection, stop: Arc<std::sync::atomic::AtomicB
         }
         if !asked_identity && opened.elapsed() > Duration::from_secs(2) {
             asked_identity = true;
-            let _ = output.send(&install::frame(17, &[]));
+            let _ = output.lock().unwrap().send(&install::frame(17, &[]));
         }
         if !asked_build && opened.elapsed() > Duration::from_secs(3) {
             asked_build = true;
-            let _ = output.send(&install::frame(49, &[]));
+            let _ = output.lock().unwrap().send(&install::frame(49, &[]));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -156,6 +165,14 @@ fn is_fm1(name: &str) -> bool {
     let updater = ["felucca", "sloop", "clipper", "ota", "sinco"].iter().any(|h| n.contains(h));
     (n.contains("fm1") || n.contains("fm-1") || n.contains("usb composite") || n.starts_with("usb-midi") || n.starts_with("usb midi") || updater)
         && !n.contains("bridge")
+}
+
+/// The FM-1 over Bluetooth MIDI ("FM1 Community_BLE"): connected once in Audio MIDI Setup on a Mac,
+/// then it's a MIDI port like USB. The Big Screen firmware answers on the port that asked, so the
+/// screen comes over it too (slower than USB). Firmware is only ever installed over USB.
+fn is_bluetooth(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("_ble") || n.contains(" ble") || n.contains("bluetooth")
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -176,6 +193,18 @@ struct App {
     install: Option<Arc<Mutex<install::Progress>>>,
     /// "Install Big Screen…" was clicked: the last check before it starts.
     confirming: bool,
+    /// What's been played (the keyboard, and the FM-1's own keys), for the spyglass.
+    played: Arc<Mutex<keys::Played>>,
+    keys: Option<keys::Keys>,
+    /// "" any keyboard plugged in, "-" none, or a port's name; and everything to channel 1.
+    keys_choice: String,
+    keys_to_one: bool,
+    keys_changed: bool,
+    glass: glass::Glass,
+    glass_on: bool,
+    /// Where the spyglass is: its centre as a fraction of the screen area, and its diameter in points.
+    glass_at: Option<(f32, f32)>,
+    glass_size: Option<f32>,
 }
 
 /// Why there's no picture yet.
@@ -190,6 +219,8 @@ enum Need {
     Updater,
     Other(String),
     Unknown(String),
+    /// Over Bluetooth with a Big Screen build that only sends its screen over USB.
+    Bluetooth,
 }
 
 const WORKBENCH: &str = "https://open.m-vave.com/fm1-workbench";
@@ -235,13 +266,30 @@ impl App {
             last_move: Instant::now(),
             install: None,
             confirming: false,
+            played: Arc::default(),
+            keys: None,
+            keys_choice: saved["keys"].as_str().unwrap_or("").to_string(),
+            keys_to_one: saved["keys_to_one"].as_bool().unwrap_or(true),
+            keys_changed: false,
+            glass: glass::Glass::default(),
+            glass_on: saved["spyglass"].as_bool().unwrap_or(true),
+            glass_at: saved["spyglass_x"].as_f64().zip(saved["spyglass_y"].as_f64()).map(|(x, y)| (x as f32, y as f32)),
+            glass_size: saved["spyglass_size"].as_f64().map(|d| d as f32),
         }
     }
 
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let _ = std::fs::write(path, json!({ "look": self.look.key() }).to_string());
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_to_one": self.keys_to_one, "spyglass": self.glass_on });
+        if let Some((x, y)) = self.glass_at {
+            s["spyglass_x"] = json!(x);
+            s["spyglass_y"] = json!(y);
+        }
+        if let Some(d) = self.glass_size {
+            s["spyglass_size"] = json!(d);
+        }
+        let _ = std::fs::write(path, s.to_string());
     }
 
     /// Finds and opens the FM-1 (now and then while it's not there), and keeps saying hello.
@@ -262,7 +310,10 @@ impl App {
             self.looked = Some(now);
             if let Some(link) = &self.link {
                 let still_there = self.scanner.as_ref().is_some_and(|o| o.ports().iter().any(|p| o.port_name(p).is_ok_and(|n| n == link.name)));
-                if !still_there || link.lost.load(std::sync::atomic::Ordering::Relaxed) {
+                // Plugged in while on Bluetooth: USB is much faster, so move over.
+                let usb_now = is_bluetooth(&link.name)
+                    && self.scanner.as_ref().is_some_and(|o| o.ports().iter().any(|p| o.port_name(p).is_ok_and(|n| is_fm1(&n) && !is_bluetooth(&n))));
+                if !still_there || usb_now || link.lost.load(std::sync::atomic::Ordering::Relaxed) {
                     self.link = None;
                 }
             }
@@ -272,10 +323,37 @@ impl App {
                     s.identity = None;
                     s.build = None;
                 }
-                self.link = open(self.shared.clone(), ctx.clone());
+                self.link = open(self.shared.clone(), self.played.clone(), ctx.clone());
             }
+            self.keep_keys(ctx);
         }
         ctx.request_repaint_after(HELLO_EVERY);
+    }
+
+    /// The keyboard: only while the FM-1 is here to play; let go if it's unplugged or another is chosen.
+    fn keep_keys(&mut self, ctx: &egui::Context) {
+        let Some(link) = &self.link else {
+            self.keys = None;
+            return;
+        };
+        let sources = keys::sources();
+        if let Some(k) = &self.keys {
+            if self.keys_changed || !sources.contains(&k.name) {
+                self.keys = None;
+                keys::silence(&link.out);
+            }
+        }
+        self.keys_changed = false;
+        if self.keys.is_none() {
+            let want = match self.keys_choice.as_str() {
+                "-" => None,
+                "" => sources.iter().find(|n| keys::plugged(n)).cloned(),
+                name => sources.iter().find(|n| *n == name).cloned(),
+            };
+            if let Some(name) = want {
+                self.keys = keys::Keys::open(&name, link.out.clone(), self.played.clone(), self.keys_to_one, ctx.clone());
+            }
+        }
     }
 
     fn take_screen(&mut self, ctx: &egui::Context) {
@@ -310,6 +388,7 @@ impl App {
             return Some(Need::Connecting);
         }
         Some(match identity {
+            Some(id) if is_bluetooth(&link.name) && !install::is_updater(&id) => Need::Bluetooth, // installs need USB
             Some(id) if id.starts_with("FM-1_0") => Need::Original,
             Some(id) if install::is_open_firmware(&id) => Need::Open,
             Some(id) if install::is_updater(&id) => Need::Updater,
@@ -368,6 +447,13 @@ impl App {
                 Need::Plug => {
                     heading(ui, "Waiting for the FM-1…");
                     body(ui, "Plug it into this computer with its USB cable and turn it on.");
+                    #[cfg(target_os = "macos")]
+                    {
+                        body(ui, "Or over Bluetooth: turn on the FM-1's Bluetooth (hold HOME and press GLO: K1 BLUETOOTH ON, K3 BLE ROLE DEVICE). Then in Audio MIDI Setup, Window › Show MIDI Studio, click the Bluetooth button and Connect next to FM1 Community_BLE. It appears here by itself.");
+                        if ui.button("Open Audio MIDI Setup").clicked() {
+                            let _ = std::process::Command::new("open").args(["-a", "Audio MIDI Setup"]).spawn();
+                        }
+                    }
                 }
                 Need::Connecting => heading(ui, "Connecting to the FM-1…"),
                 Need::Original => {
@@ -405,6 +491,10 @@ impl App {
                     body(ui, &format!("It says it is \"{id}\". Big Screen installs over M-VAVE's Official Open firmware, so that comes first."));
                     step1(ui);
                 }
+                Need::Bluetooth => {
+                    heading(ui, "No screen over Bluetooth yet");
+                    body(ui, "This FM-1 sends its screen over USB only. The newer Big Screen firmware in this app sends it over Bluetooth too: plug the FM-1 in with its USB cable once, and this app offers to update it (about 2 minutes). Installing over Bluetooth isn't possible.");
+                }
                 Need::Unknown(name) => {
                     heading(ui, "No screen from the FM-1 yet");
                     body(ui, &format!("Connected to \"{name}\", but it isn't sending its screen and didn't say which firmware it runs. With M-VAVE's original firmware:"));
@@ -432,6 +522,30 @@ impl App {
 
     fn buttons(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal_wrapped(|ui| {
+            let shown = match &self.keys {
+                Some(k) => format!("Keys: {}", k.name),
+                None if self.keys_choice == "-" => "Keys: none".into(),
+                None => "Keys…".into(),
+            };
+            let (choice, to_one) = (self.keys_choice.clone(), self.keys_to_one);
+            egui::ComboBox::from_id_salt("keys").selected_text(shown).width(300.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.keys_choice, String::new(), "Any keyboard plugged in");
+                for name in keys::sources() {
+                    ui.selectable_value(&mut self.keys_choice, name.clone(), name);
+                }
+                ui.selectable_value(&mut self.keys_choice, "-".to_string(), "None");
+                ui.separator();
+                ui.checkbox(&mut self.keys_to_one, "All to channel 1 (where the FM-1 listens)");
+            });
+            if self.keys_choice != choice || self.keys_to_one != to_one {
+                self.keys_changed = true;
+                self.looked = None; // connect it now
+                self.store();
+            }
+            if ui.selectable_label(self.glass_on, "Spyglass").clicked() {
+                self.glass_on = !self.glass_on;
+                self.store();
+            }
             let before = self.look;
             egui::ComboBox::from_id_salt("look").selected_text(self.look.name()).width(260.0).show_ui(ui, |ui| {
                 for l in Look::ALL {
@@ -449,7 +563,8 @@ impl App {
             // A Big Screen FM-1 on another build than the one in this app: offer it.
             let other_build = self.shared.lock().unwrap().build.clone().filter(|b| *b != install::build_id());
             let showing = self.shared.lock().unwrap().last.is_some();
-            if showing && other_build.is_some() && self.install.is_none() {
+            let wired = self.link.as_ref().is_some_and(|l| !is_bluetooth(&l.name));
+            if showing && wired && other_build.is_some() && self.install.is_none() {
                 if self.confirming {
                     if ui.button("Install now (keep the FM-1 plugged in)").clicked() {
                         self.confirming = false;
@@ -472,22 +587,35 @@ impl App {
 }
 
 /// Opens the first FM-1 found, both ways; its screen messages go into `shared`.
-fn open(shared: Arc<Mutex<Shared>>, ctx: egui::Context) -> Option<Link> {
+fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui::Context) -> Option<Link> {
     let mut input = MidiInput::new(APP_NAME).ok()?;
     input.ignore(Ignore::None); // SysEx is the whole point
     let output = MidiOutput::new(APP_NAME).ok()?;
     // An FM-1 that names itself first (Open firmware), then one that doesn't (the original).
     let ports = input.ports();
-    let named = |p: &&midir::MidiInputPort| input.port_name(p).is_ok_and(|n| is_fm1(&n) && !n.to_lowercase().contains("usb composite"));
-    let in_port = ports.iter().find(named).or_else(|| ports.iter().find(|p| input.port_name(p).is_ok_and(|n| is_fm1(&n))))?;
+    // USB before Bluetooth; one that names itself (Open firmware) before the original's "USB Composite".
+    let usb = |p: &&midir::MidiInputPort| input.port_name(p).is_ok_and(|n| is_fm1(&n) && !is_bluetooth(&n));
+    let named = |p: &&midir::MidiInputPort| usb(p) && input.port_name(p).is_ok_and(|n| !n.to_lowercase().contains("usb composite"));
+    let in_port = ports
+        .iter()
+        .find(named)
+        .or_else(|| ports.iter().find(usb))
+        .or_else(|| ports.iter().find(|p| input.port_name(p).is_ok_and(|n| is_fm1(&n))))?;
     let name = input.port_name(in_port).ok()?;
     let out_port = output.ports().into_iter().find(|p| output.port_name(p).is_ok_and(|n| n == name))?;
-    let output = output.connect(&out_port, "FM-1 Mirror out").ok()?;
+    let output = Arc::new(Mutex::new(output.connect(&out_port, "FM-1 Mirror out").ok()?));
+    let mut parser = keys::Parser::default();
     let input = input
         .connect(
             in_port,
             "FM-1 Mirror in",
             move |_, buffer, _| {
+                // Notes from the FM-1's own keys (KEY OUT on), for the spyglass.
+                let before = played.lock().unwrap().note_ons;
+                parser.feed(buffer, &mut played.lock().unwrap());
+                if played.lock().unwrap().note_ons != before {
+                    ctx.request_repaint();
+                }
                 let mut s = shared.lock().unwrap();
                 // macOS can deliver several SysEx messages in one buffer: take them one by one.
                 for m in screen::messages(buffer) {
@@ -514,9 +642,43 @@ fn open(shared: Arc<Mutex<Shared>>, ctx: egui::Context) -> Option<Link> {
         .ok()?;
     let stop: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let lost: Arc<std::sync::atomic::AtomicBool> = Arc::default();
-    let (st, lo) = (stop.clone(), lost.clone());
-    std::thread::spawn(move || hellos(output, st, lo));
-    Some(Link { name, _input: input, opened: Instant::now(), stop, lost })
+    let (st, lo, out) = (stop.clone(), lost.clone(), output.clone());
+    std::thread::spawn(move || hellos(out, st, lo));
+    Some(Link { name, _input: input, out: output, opened: Instant::now(), stop, lost })
+}
+
+impl App {
+    /// The spyglass over the screen area: the first time in the room beside the FM-1's (square,
+    /// centred) screen if there's enough, else top right over it. Drag to move, scroll to resize.
+    fn spyglass(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, area: Rect) {
+        if self.glass.tick(&self.played.lock().unwrap()) || self.glass.busy() {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        let side = (area.width() - area.height()).max(0.0) / 2.0;
+        let room = side >= 200.0;
+        let d = self.glass_size.unwrap_or(if room { (side - 24.0).min(380.0) } else { area.width().min(area.height()) * 0.38 });
+        let d = d.clamp(140.0, area.width().min(area.height()));
+        let (fx, fy) = self.glass_at.unwrap_or(if room { ((area.width() - side / 2.0) / area.width(), 0.5) } else { (1.0 - (d / 2.0 + 16.0) / area.width(), (d / 2.0 + 16.0) / area.height()) });
+        let c = Pos2::new(area.left() + fx * area.width(), area.top() + fy * area.height());
+        let r = ui.interact(Rect::from_center_size(c, vec2(d, d)), ui.id().with("spyglass"), egui::Sense::drag());
+        let mut moved = false;
+        if r.dragged() {
+            let c = (c + r.drag_delta()).clamp(area.min + vec2(d, d) / 2.0, area.max - vec2(d, d) / 2.0);
+            self.glass_at = Some(((c.x - area.left()) / area.width(), (c.y - area.top()) / area.height()));
+            moved = true;
+        }
+        if r.hovered() {
+            let grow = ctx.input(|i| i.smooth_scroll_delta.y);
+            if grow != 0.0 {
+                self.glass_size = Some((d + grow * 0.6).clamp(140.0, area.width().min(area.height())));
+                moved = true;
+            }
+        }
+        if r.drag_stopped() || (moved && !r.dragged()) {
+            self.store();
+        }
+        self.glass.draw(ui.painter(), c, d);
+    }
 }
 
 /// The biggest square that fits in `area`, in its middle.
@@ -562,6 +724,9 @@ impl eframe::App for App {
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(area.shrink2(vec2(40.0, 10.0))), |ui| self.need_panel(ui, need));
             } else if let Some(tex) = &self.texture {
                 p.image(tex.id(), fit(area), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                if self.glass_on {
+                    self.spyglass(ui, ctx, area);
+                }
             } else {
                 p.text(area.center(), Align2::CENTER_CENTER, "…", FontId::proportional(40.0), Color32::WHITE);
             }

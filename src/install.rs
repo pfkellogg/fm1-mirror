@@ -228,7 +228,8 @@ fn candidates(updater: bool) -> Vec<String> {
         .filter(|n| {
             let n = n.to_lowercase();
             let fm1 = n.contains("fm1") || n.contains("fm-1") || n.starts_with("usb-midi") || n.starts_with("usb midi") || n.contains("composite");
-            !n.contains("bridge") && (fm1 || (updater && ["felucca", "sloop", "clipper", "ota", "sinco"].iter().any(|h| n.contains(h))))
+            let bluetooth = n.contains("_ble") || n.contains(" ble") || n.contains("bluetooth"); // firmware goes over USB only
+            !n.contains("bridge") && !bluetooth && (fm1 || (updater && ["felucca", "sloop", "clipper", "ota", "sinco"].iter().any(|h| n.contains(h))))
         })
         .collect()
 }
