@@ -117,7 +117,7 @@ back to V15 first.
 - When a newer Big Screen firmware comes with a new FM-1 Mirror, a button offers to update the FM-1.
 
 **On Android**, [FM-1 Mirror + Spyglass](https://github.com/pfkellogg/fm1-mirror-spyglass-android) also plays the FM-1 from a USB keyboard and shows
-the notes you play in a spyglass beside the screen.
+the notes you play in a spyglass beside the screen. Watch it: [FM-1 Mirror + Spyglass for Android](https://youtu.be/XDqrabQf5uY).
 
 Also playing it from a USB keyboard? [Synth Spyglass](https://youtu.be/KoUeE4bOoy0) (a separate
 app) recognises the Big Screen FM-1 too, shows the name of the sound it's playing, and has a **See
