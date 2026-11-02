@@ -204,7 +204,8 @@ struct App {
     keys: Option<keys::Keys>,
     /// "" any keyboard plugged in, "-" none, or a port's name; and everything to channel 1.
     keys_choice: String,
-    keys_to_one: bool,
+    /// The channel Keys sends on: 1 to 16, or 0 for as they come.
+    keys_channel: u8,
     keys_changed: bool,
     glass: glass::Glass,
     glass_on: bool,
@@ -275,7 +276,8 @@ impl App {
             played: Arc::default(),
             keys: None,
             keys_choice: saved["keys"].as_str().unwrap_or("").to_string(),
-            keys_to_one: saved["keys_to_one"].as_bool().unwrap_or(true),
+            // (an older "all to channel 1" switch carries over)
+            keys_channel: saved["keys_channel"].as_u64().map(|c| c.min(16) as u8).unwrap_or(if saved["keys_to_one"].as_bool().unwrap_or(true) { 1 } else { 0 }),
             keys_changed: false,
             glass: glass::Glass::default(),
             glass_on: saved["spyglass"].as_bool().unwrap_or(true),
@@ -287,7 +289,7 @@ impl App {
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_to_one": self.keys_to_one, "spyglass": self.glass_on });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on });
         if let Some((x, y)) = self.glass_at {
             s["spyglass_x"] = json!(x);
             s["spyglass_y"] = json!(y);
@@ -357,7 +359,7 @@ impl App {
                 name => sources.iter().find(|n| *n == name).cloned(),
             };
             if let Some(name) = want {
-                self.keys = keys::Keys::open(&name, link.out.clone(), self.played.clone(), self.keys_to_one, ctx.clone());
+                self.keys = keys::Keys::open(&name, link.out.clone(), self.played.clone(), self.keys_channel, ctx.clone());
             }
         }
     }
@@ -533,7 +535,7 @@ impl App {
                 None if self.keys_choice == "-" => "Keys: none".into(),
                 None => "Keys…".into(),
             };
-            let (choice, to_one) = (self.keys_choice.clone(), self.keys_to_one);
+            let (choice, channel) = (self.keys_choice.clone(), self.keys_channel);
             egui::ComboBox::from_id_salt("keys").selected_text(shown).width(300.0).show_ui(ui, |ui| {
                 ui.selectable_value(&mut self.keys_choice, String::new(), "Any keyboard plugged in");
                 for name in keys::sources() {
@@ -541,9 +543,14 @@ impl App {
                 }
                 ui.selectable_value(&mut self.keys_choice, "-".to_string(), "None");
                 ui.separator();
-                ui.checkbox(&mut self.keys_to_one, "All to channel 1 (where the FM-1 listens)");
+                ui.label("Send on");
+                ui.selectable_value(&mut self.keys_channel, 1, "Channel 1 (the FM-1's own: the usual one)");
+                for c in 2..=16u8 {
+                    ui.selectable_value(&mut self.keys_channel, c, format!("Channel {c}"));
+                }
+                ui.selectable_value(&mut self.keys_channel, 0, "As they come (each note on its own channel)");
             });
-            if self.keys_choice != choice || self.keys_to_one != to_one {
+            if self.keys_choice != choice || self.keys_channel != channel {
                 self.keys_changed = true;
                 self.looked = None; // connect it now
                 self.store();
@@ -570,7 +577,9 @@ impl App {
             let other_build = self.shared.lock().unwrap().build.clone().filter(|b| *b != install::build_id());
             let showing = self.shared.lock().unwrap().last.is_some();
             let wired = self.link.as_ref().is_some_and(|l| !is_bluetooth(&l.name));
-            if showing && wired && other_build.is_some() && self.install.is_none() {
+            // Only over M-VAVE's Open firmware: another firmware with the mirror (ChoralRoot + Big Screen) stays.
+            let open = self.shared.lock().unwrap().identity.as_deref().is_some_and(install::is_open_firmware);
+            if showing && wired && open && other_build.is_some() && self.install.is_none() {
                 if self.confirming {
                     if ui.button("Install now (keep the FM-1 plugged in)").clicked() {
                         self.confirming = false;

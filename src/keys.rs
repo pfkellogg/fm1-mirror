@@ -93,14 +93,15 @@ impl Parser {
     }
 }
 
-/// Keeps what can be passed on: SysEx dropped, channel messages moved to channel 1 with `to_one`.
+/// Keeps what can be passed on: SysEx dropped; with `channel` 1 to 16, channel messages moved to that channel
+/// (1 by default, where the FM-1 listens; another for a firmware that listens there, e.g. ChoralRoot's MIDI Keys).
 #[derive(Default)]
 struct Filter {
     sysex: bool,
 }
 
 impl Filter {
-    fn pass(&mut self, bytes: &[u8], to_one: bool) -> Vec<u8> {
+    fn pass(&mut self, bytes: &[u8], channel: u8) -> Vec<u8> {
         let mut out = Vec::with_capacity(bytes.len());
         for &b in bytes {
             if b == 0xF0 {
@@ -111,7 +112,7 @@ impl Filter {
                 out.push(b); // clock and the like, even inside SysEx
             } else if !self.sysex || b >= 0x80 {
                 self.sysex = false; // a status byte ends a SysEx that never closed
-                out.push(if to_one && (0x80..0xF0).contains(&b) { b & 0xF0 } else { b });
+                out.push(if channel > 0 && (0x80..0xF0).contains(&b) { (b & 0xF0) | (channel - 1) } else { b });
             }
         }
         out
@@ -137,7 +138,7 @@ pub struct Keys {
 }
 
 impl Keys {
-    pub fn open(name: &str, out: Arc<Mutex<MidiOutputConnection>>, played: Arc<Mutex<Played>>, to_one: bool, ctx: eframe::egui::Context) -> Option<Keys> {
+    pub fn open(name: &str, out: Arc<Mutex<MidiOutputConnection>>, played: Arc<Mutex<Played>>, channel: u8, ctx: eframe::egui::Context) -> Option<Keys> {
         let mut input = MidiInput::new(APP_NAME).ok()?;
         input.ignore(Ignore::None); // clock goes through too
         let port = input.ports().into_iter().find(|p| input.port_name(p).is_ok_and(|n| n == name))?;
@@ -147,7 +148,7 @@ impl Keys {
                 &port,
                 "FM-1 Mirror keys",
                 move |_, bytes, _| {
-                    let pass = filter.pass(bytes, to_one);
+                    let pass = filter.pass(bytes, channel);
                     if pass.is_empty() {
                         return;
                     }
@@ -178,9 +179,10 @@ mod tests {
     fn passes_notes_on_channel_one_and_drops_sysex() {
         let mut f = Filter::default();
         // A Keystation on channel 13; a SysEx in the middle; clock inside it still goes.
-        assert_eq!(f.pass(&[0x9C, 60, 100], true), vec![0x90, 60, 100]);
-        assert_eq!(f.pass(&[0x9C, 60, 100], false), vec![0x9C, 60, 100]);
-        assert_eq!(f.pass(&[0xF0, 0x7D, 0xF8, 1, 2, 0xF7, 0x8C, 60, 0], true), vec![0xF8, 0x80, 60, 0]);
+        assert_eq!(f.pass(&[0x9C, 60, 100], 1), vec![0x90, 60, 100]);
+        assert_eq!(f.pass(&[0x9C, 60, 100], 3), vec![0x92, 60, 100]); // ChoralRoot's MIDI Keys on 3
+        assert_eq!(f.pass(&[0x9C, 60, 100], 0), vec![0x9C, 60, 100]);
+        assert_eq!(f.pass(&[0xF0, 0x7D, 0xF8, 1, 2, 0xF7, 0x8C, 60, 0], 1), vec![0xF8, 0x80, 60, 0]);
     }
 
     #[test]
