@@ -23,8 +23,6 @@ jobs:
       - if: matrix.name == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo test
-      - if: matrix.name == 'linux'
-        run: android/test/run.sh
       - if: matrix.name == 'mac'
         run: |
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
@@ -61,6 +59,6 @@ jobs:
           ls -l
           gh release create "${{ github.ref_name }}" FM-1-Mirror-* --repo "${{ github.repository }}" \
             --title "FM-1 Mirror ${{ github.ref_name }}" --notes-file - <<'NOTES'
-          The M-VAVE FM-1's screen, big, on Mac, Windows, Linux and Android. See the README for setting up the
+          The M-VAVE FM-1's screen, big, on Mac, Windows and Linux (Android: pfkellogg/fm1-mirror-spyglass-android). See the README for setting up the
           FM-1 (two steps, and how to go back). Contact: pfkellogg@gmail.com
           NOTES

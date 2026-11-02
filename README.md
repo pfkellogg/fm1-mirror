@@ -9,7 +9,9 @@ It's live. Turn a knob, press a button, play a note, and the big screen changes 
 
 ![The FM-1's screen in FM-1 Mirror](docs/big-screen.png)
 
-Free, for **Mac, Windows, Linux and Android**. Questions, or something not working? Write to me:
+Free, for **Mac, Windows and Linux**, and on **Android** as
+[FM-1 Mirror + Spyglass](https://github.com/pfkellogg/fm1-mirror-spyglass-android) (the same big screen, plus playing the FM-1 from a USB keyboard and
+seeing your notes). Questions, or something not working? Write to me:
 **pfkellogg@gmail.com**
 
 ## Download
@@ -21,7 +23,7 @@ Click the file for your computer. These links always give the newest version:
 | Mac (Apple silicon and Intel) | [**FM-1-Mirror-mac.zip**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-mac.zip) | Double-click the zip to unzip it, drag **FM-1 Mirror** (the app, with the FM-1 Mirror name) to Applications and open it. It isn't from the App Store, so the first time macOS may refuse: open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to FM-1 Mirror. |
 | Windows 10 and 11 | [**FM-1-Mirror-windows.exe**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-windows.exe) | Double-click. If Windows says "protected your PC", click **More info → Run anyway**. |
 | Linux | [**FM-1-Mirror-linux**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-linux) | `chmod +x FM-1-Mirror-linux` and run it. |
-| Android 11 or newer (tablet or phone) | [**FM-1-Mirror-android.apk**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-android.apk) | Open the link on the tablet or phone and tap the file when it has downloaded. It isn't from Google Play, so Android asks first: allow your browser to **install unknown apps**, then tap **Install**. |
+| Android 11 or newer (tablet or phone) | [**FM-1 Mirror + Spyglass**](https://github.com/pfkellogg/fm1-mirror-spyglass-android) | Its own page, with the download and how to plug it in. |
 
 > **Not the green "Code" button.** GitHub's green **Code → Download ZIP** button at the top of this
 > page gives the app's source code (a folder called `fm1-mirror-master`), which doesn't run. Use the
@@ -30,9 +32,7 @@ Click the file for your computer. These links always give the newest version:
 Plug the FM-1 into the computer with a USB **data** cable (some cables only charge), turn it on, and
 open FM-1 Mirror.
 
-**On Android** the FM-1 plugs into the tablet or phone's USB-C port: a USB-C to USB-C data cable, or
-the FM-1's own cable through a USB-C (OTG) adapter. The tablet powers the FM-1. Then open FM-1 Mirror.
-Tap the screen for full screen, and tap again to bring the buttons back.
+**On Android:** see [FM-1 Mirror + Spyglass](https://github.com/pfkellogg/fm1-mirror-spyglass-android).
 
 ## How it works, in plain words
 
@@ -74,7 +74,7 @@ firmware your FM-1 has and what to do next.
 
 **If your FM-1 already runs M-VAVE's Open firmware**, only step 2.
 
-**On Android**, step 2 works the same in the Android app. Step 1 is easiest on a computer: the
+**On Android**, step 2 works the same in FM-1 Mirror + Spyglass. Step 1 is easiest on a computer: the
 workbench page needs Chrome or Edge, and then the FM-1 goes back on the tablet for step 2.
 
 Keep the FM-1 plugged in and turned on while either step runs. On Windows, close other music apps
@@ -116,19 +116,8 @@ back to V15 first.
   them back.
 - When a newer Big Screen firmware comes with a new FM-1 Mirror, a button offers to update the FM-1.
 
-**On Android** the app is called **FM-1 Mirror + Spyglass**: the same mirror, plus playing and seeing your notes.
-
-- **Keys:** a keyboard plugged in too (through a USB hub) plays the FM-1 through FM-1 Mirror, while
-  the screen shows. Android lets only one app at a time send to the FM-1, so this app passes the notes
-  on. It picks the keyboard by itself; tap **Keys** to choose another device (a sequencer, a USB MIDI
-  interface's MIDI IN) or **None**. Everything is moved to channel 1, where the FM-1 listens (a
-  keyboard knocked onto another channel would be silent); tap **Keys › Channels** to send them as they
-  come instead. SysEx is never passed on (that's how the FM-1 is updated). Close Synth Spyglass or MIDI
-  Bridge first: they would hold the FM-1.
-- **Spyglass:** a round brass eyepiece beside the screen with the note or chord you play, on a staff,
-  and how hard you hit the key. Drag it to move it; pinch it, or tap it and drag the grip, to resize it;
-  tap it and **✕** to put it away.
-- Playing works while FM-1 Mirror is on screen: switched away, it lets go of the FM-1.
+**On Android**, [FM-1 Mirror + Spyglass](https://github.com/pfkellogg/fm1-mirror-spyglass-android) also plays the FM-1 from a USB keyboard and shows
+the notes you play in a spyglass beside the screen.
 
 Also playing it from a USB keyboard? [Synth Spyglass](https://youtu.be/KoUeE4bOoy0) (a separate
 app) recognises the Big Screen FM-1 too, shows the name of the sound it's playing, and has a **See
@@ -145,16 +134,11 @@ big screen** button of its own.
   [pfkellogg/fm1_open, branch `screen-out`](https://github.com/pfkellogg/fm1_open/tree/screen-out).
 - `tools/simulate_fm1.py`: a pretend FM-1 for trying the app without one;
   `tools/flash_fm1.py`: the installer as a script.
-- `android/`: the Android app, in plain Java (Android's own MIDI, no other libraries). `Codec.java`
-  is the screen and updater messages, `Installer.java` the installer, both ports of the Rust code.
-  `Keys.java` passes a keyboard on to the FM-1; `Glass.java` is the spyglass (with `StaffView`,
-  `Chord` and `NoteNames` from Synth Spyglass for Android).
-  `android/test/run.sh` checks the messages on a computer. Debug builds include a pretend FM-1
-  ("FM1 Simulator", `app/src/debug`).
+- The Android app, FM-1 Mirror + Spyglass, has its own repository:
+  [pfkellogg/fm1-mirror-spyglass-android](https://github.com/pfkellogg/fm1-mirror-spyglass-android).
 
 Build it yourself with Rust: `cargo build --release` (on Linux, install `libasound2-dev` first);
-on a Mac, `./make_app.sh` makes the app. The Android app: `cd android && ./gradlew assembleDebug`
-(Java 17 and the Android SDK).
+on a Mac, `./make_app.sh` makes the app.
 
 ## Thanks
 
