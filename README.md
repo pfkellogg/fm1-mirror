@@ -121,9 +121,11 @@ back to V15 first.
   Bluetooth needs the Big Screen build from FM-1 Mirror 1.2 or later: an older one sends its screen
   over USB only.
 - **Keys**: a keyboard plugged into the computer plays the FM-1 through FM-1 Mirror. It's picked by
-  itself; choose another (or **None**) in the Keys menu. Everything is moved to channel 1, where the
-  FM-1 listens (a keyboard knocked onto another channel would be silent); untick **All to channel 1**
-  to send channels as they come. SysEx is never passed on. If another app (MIDI Bridge, Synth
+  itself (a keyboard first, not an audio interface's MIDI port); choose another (or **None**) in the
+  Keys menu. **Send on** picks the channel: **channel 1** by default, where the FM-1 listens (a keyboard
+  knocked onto another channel would be silent); another channel for a firmware that listens there
+  ([ChoralRoot's MIDI Keys](https://github.com/pfkellogg/ChoralRootFM1/blob/big-screen/BIG_SCREEN.md#playing-it-from-a-usb-keyboard),
+  for its chord engine); or **as they come**. SysEx is never passed on. If another app (MIDI Bridge, Synth
   Spyglass) also plays the FM-1 from the same keyboard, set Keys to **None**, or you'll hear notes twice.
 - **Spyglass**: a round brass eyepiece over the screen with the note or chord you play, on a staff,
   and how hard you hit the key. Drag it to move it; scroll over it to resize it; **Spyglass** in the
@@ -146,6 +148,12 @@ Bluetooth included. Watch it: [FM-1 Mirror + Spyglass for Android](https://youtu
 Also playing it from a USB keyboard? [Synth Spyglass](https://youtu.be/KoUeE4bOoy0) (a separate
 app) recognises the Big Screen FM-1 too, shows the name of the sound it's playing, and has a **See
 big screen** button of its own.
+
+## Other firmwares: ChoralRoot
+
+The screen messages work with any FM-1 firmware that sends them (the screen part is MIT). The first community firmware
+with it: **ChoralRoot + FM-1 Big Screen** ([pfkellogg/ChoralRootFM1](https://github.com/pfkellogg/ChoralRootFM1/blob/big-screen/BIG_SCREEN.md)),
+Quixotic7's chord instrument with 26 lines added. Over USB; "Update FM-1" doesn't show on it (it would replace it).
 
 ## For the curious
 
