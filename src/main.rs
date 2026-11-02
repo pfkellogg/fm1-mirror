@@ -74,8 +74,14 @@ impl Look {
         match self {
             Look::Color => Color32::from_rgb(r, g, b),
             Look::Bright => {
-                let k = |v: u8| (v as f32 * 1.6).min(255.0) as u8;
-                Color32::from_rgb(k(r), k(g), k(b))
+                // Brighter, and any colour that isn't the black background up to at least 80%
+                // brightness, keeping its hue: a dark purple on black becomes a light lilac.
+                let k = |v: u8| (v as f32 * 1.6).min(255.0);
+                let (r, g, b) = (k(r), k(g), k(b));
+                let l = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+                let t = if l > 0.03 && l < 0.8 { (0.8 - l) / (1.0 - l) } else { 0.0 };
+                let up = |v: f32| (v + (255.0 - v) * t) as u8;
+                Color32::from_rgb(up(r), up(g), up(b))
             }
             Look::Yellow => {
                 let l = lit(luma);

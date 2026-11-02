@@ -9,9 +9,12 @@ It's live. Turn a knob, press a button, play a note, and the big screen changes 
 
 ![The FM-1's screen in FM-1 Mirror](docs/big-screen.png)
 
+It also plays the FM-1 from a keyboard (**Keys**) and shows the notes and chords you play in a
+**spyglass** beside the screen, and on a Mac it works over **Bluetooth** as well as USB.
+
 Free, for **Mac, Windows and Linux**, and on **Android** as
-[FM-1 Mirror + Spyglass](https://github.com/pfkellogg/fm1-mirror-spyglass-android) (the same big screen, plus playing the FM-1 from a USB keyboard and
-seeing your notes). Questions, or something not working? Write to me:
+[FM-1 Mirror + Spyglass](https://github.com/pfkellogg/fm1-mirror-spyglass-android) (the same app for tablets and
+phones). Questions, or something not working? Write to me:
 **pfkellogg@gmail.com**
 
 ## Download
@@ -111,13 +114,34 @@ back to V15 first.
 ## Using FM-1 Mirror
 
 - **F**: full screen (Esc to leave). Drag the window to another monitor or a TV first if you like.
-- **Looks**: Color, Bright color, Yellow on black, White on black, Black on white.
+- **Looks**: Color, Bright color (lifts dark colours like purple so they can be read), Yellow on black, White on black, Black on white.
 - The buttons hide after a few seconds so the screen is as big as it can be; move the mouse to bring
   them back.
 - When a newer Big Screen firmware comes with a new FM-1 Mirror, a button offers to update the FM-1.
+  Bluetooth needs the Big Screen build from FM-1 Mirror 1.2 or later: an older one sends its screen
+  over USB only.
+- **Keys**: a keyboard plugged into the computer plays the FM-1 through FM-1 Mirror. It's picked by
+  itself; choose another (or **None**) in the Keys menu. Everything is moved to channel 1, where the
+  FM-1 listens (a keyboard knocked onto another channel would be silent); untick **All to channel 1**
+  to send channels as they come. SysEx is never passed on. If another app (MIDI Bridge, Synth
+  Spyglass) also plays the FM-1 from the same keyboard, set Keys to **None**, or you'll hear notes twice.
+- **Spyglass**: a round brass eyepiece over the screen with the note or chord you play, on a staff,
+  and how hard you hit the key. Drag it to move it; scroll over it to resize it; **Spyglass** in the
+  bar puts it away. The FM-1's own keys show too, once **KEY OUT** is on: on the FM-1, press **SEQ**,
+  turn **ALGO** to page **6/8 MIDI TRACK**, and turn **K4 (KEY OUT)** to **ON** (K3, OUT PORT, on
+  USB+BLE).
+- **No sound?** A keyboard's volume slider (a Keystation has one) sets the FM-1's volume: keep it up.
 
-**On Android**, [FM-1 Mirror + Spyglass](https://github.com/pfkellogg/fm1-mirror-spyglass-android) also plays the FM-1 from a USB keyboard and shows
-the notes you play in a spyglass beside the screen. Watch it: [FM-1 Mirror + Spyglass for Android](https://youtu.be/XDqrabQf5uY).
+**Over Bluetooth (Mac):** the FM-1's Bluetooth MIDI has to be on (on the FM-1, hold **HOME** and
+press **GLO**: **K1 BLUETOOTH ON**, **K3 BLE ROLE DEVICE**). Then once, in **Audio MIDI Setup**,
+**Window › Show MIDI Studio**, click the **Bluetooth** button and **Connect** next to **FM1
+Community_BLE**; FM-1 Mirror finds it by itself (the bottom bar says "FM1 Community_BLE Bluetooth").
+It's slower than USB but follows the screen well. USB comes first whenever the FM-1 is plugged in,
+and firmware is only ever installed over USB. The FM-1 takes one Bluetooth connection at a time, so
+close FM-1 Mirror on the tablet before connecting the Mac, and the other way round.
+
+**On Android**, [FM-1 Mirror + Spyglass](https://github.com/pfkellogg/fm1-mirror-spyglass-android) does all of this on a tablet or phone,
+Bluetooth included. Watch it: [FM-1 Mirror + Spyglass for Android](https://youtu.be/XDqrabQf5uY).
 
 Also playing it from a USB keyboard? [Synth Spyglass](https://youtu.be/KoUeE4bOoy0) (a separate
 app) recognises the Big Screen FM-1 too, shows the name of the sound it's playing, and has a **See
@@ -125,6 +149,9 @@ big screen** button of its own.
 
 ## For the curious
 
+- `src/keys.rs`: Keys (the keyboard passed on to the FM-1) and what's been played; `src/glass.rs`:
+  the spyglass; `src/chord.rs`, `src/staff.rs`, `src/glyphs.rs`: chord names and the staff, from
+  Synth Spyglass.
 - `src/screen.rs`: the screen messages. The computer sends `F0 7D 'F' 'S' 00 F7` about once a second
   (`01` to have the whole screen sent again); the FM-1 sends each row it paints as
   `F0 7D 'F' 'S' 01 row col <runs> F7`, each run a count and an RGB565 colour.
