@@ -355,7 +355,7 @@ impl App {
         if self.keys.is_none() {
             let want = match self.keys_choice.as_str() {
                 "-" => None,
-                "" => sources.iter().find(|n| keys::plugged(n)).cloned(),
+                "" => keys::keyboard_first(&sources),
                 name => sources.iter().find(|n| *n == name).cloned(),
             };
             if let Some(name) = want {

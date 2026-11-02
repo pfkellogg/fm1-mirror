@@ -125,10 +125,25 @@ pub fn sources() -> Vec<String> {
     input.ports().iter().filter_map(|p| input.port_name(p).ok()).filter(|n| !is_fm1(n)).collect()
 }
 
-/// Picked by itself when nothing was chosen: a keyboard, not a virtual port or another app's.
+/// Picked by itself when nothing was chosen: a keyboard, not a virtual port or another app's, nor a
+/// keyboard's "Transport" / "DAW" port.
 pub fn plugged(name: &str) -> bool {
     let n = name.to_lowercase();
-    !["iac", "bridge", "spyglass", "network", "session", "virtual", "wi-fi", "loopmidi", "through"].iter().any(|h| n.contains(h))
+    !["iac", "bridge", "spyglass", "network", "session", "virtual", "wi-fi", "loopmidi", "through", "transport", "daw", "ctrl"]
+        .iter()
+        .any(|h| n.contains(h))
+}
+
+/// Of those, which to pick first: one that looks like a keyboard before, say, an audio interface's MIDI port.
+pub fn keyboard_first(names: &[String]) -> Option<String> {
+    let looks = |n: &String| {
+        let n = n.to_lowercase();
+        ["key", "piano", "minilab", "launch", "oxygen", "keystep", "microkorg", "akai", "arturia", "novation", "m-audio", "roland", "yamaha", "casio", "korg"]
+            .iter()
+            .any(|h| n.contains(h))
+    };
+    let usable: Vec<&String> = names.iter().filter(|n| plugged(n)).collect();
+    usable.iter().find(|n| looks(n)).or(usable.first()).map(|n| n.to_string())
 }
 
 /// A keyboard's input, passed on to the FM-1 (`out`) and into `played`.
@@ -183,6 +198,13 @@ mod tests {
         assert_eq!(f.pass(&[0x9C, 60, 100], 3), vec![0x92, 60, 100]); // ChoralRoot's MIDI Keys on 3
         assert_eq!(f.pass(&[0x9C, 60, 100], 0), vec![0x9C, 60, 100]);
         assert_eq!(f.pass(&[0xF0, 0x7D, 0xF8, 1, 2, 0xF7, 0x8C, 60, 0], 1), vec![0xF8, 0x80, 60, 0]);
+    }
+
+    #[test]
+    fn picks_the_keyboard_first() {
+        let ports = ["IAC Driver Bus 1", "AIR 192 6", "Keystation 49 MK3 (USB MIDI)", "Keystation 49 MK3 (Transport)"].map(String::from);
+        assert_eq!(keyboard_first(&ports).as_deref(), Some("Keystation 49 MK3 (USB MIDI)"));
+        assert_eq!(keyboard_first(&["AIR 192 6".to_string()]).as_deref(), Some("AIR 192 6"));
     }
 
     #[test]
