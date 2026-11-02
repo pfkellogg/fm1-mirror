@@ -116,6 +116,20 @@ back to V15 first.
   them back.
 - When a newer Big Screen firmware comes with a new FM-1 Mirror, a button offers to update the FM-1.
 
+**On Android:**
+
+- **Keys:** a keyboard plugged in too (through a USB hub) plays the FM-1 through FM-1 Mirror, while
+  the screen shows. Android lets only one app at a time send to the FM-1, so this app passes the notes
+  on. It picks the keyboard by itself; tap **Keys** to choose another device (a sequencer, a USB MIDI
+  interface's MIDI IN) or **None**. Everything is moved to channel 1, where the FM-1 listens (a
+  keyboard knocked onto another channel would be silent); tap **Keys › Channels** to send them as they
+  come instead. SysEx is never passed on (that's how the FM-1 is updated). Close Synth Spyglass or MIDI
+  Bridge first: they would hold the FM-1.
+- **Spyglass:** a round brass eyepiece beside the screen with the note or chord you play, on a staff,
+  and how hard you hit the key. Drag it to move it; pinch it, or tap it and drag the grip, to resize it;
+  tap it and **✕** to put it away.
+- Playing works while FM-1 Mirror is on screen: switched away, it lets go of the FM-1.
+
 Also playing it from a USB keyboard? [Synth Spyglass](https://youtu.be/KoUeE4bOoy0) (a separate
 app) recognises the Big Screen FM-1 too, shows the name of the sound it's playing, and has a **See
 big screen** button of its own.
@@ -133,6 +147,8 @@ big screen** button of its own.
   `tools/flash_fm1.py`: the installer as a script.
 - `android/`: the Android app, in plain Java (Android's own MIDI, no other libraries). `Codec.java`
   is the screen and updater messages, `Installer.java` the installer, both ports of the Rust code.
+  `Keys.java` passes a keyboard on to the FM-1; `Glass.java` is the spyglass (with `StaffView`,
+  `Chord` and `NoteNames` from Synth Spyglass for Android).
   `android/test/run.sh` checks the messages on a computer. Debug builds include a pretend FM-1
   ("FM1 Simulator", `app/src/debug`).
 

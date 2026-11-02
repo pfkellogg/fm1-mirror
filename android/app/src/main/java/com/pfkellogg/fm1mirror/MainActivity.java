@@ -1,6 +1,7 @@
 package com.pfkellogg.fm1mirror;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -33,11 +34,14 @@ import android.widget.TextView;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
  * FM-1 Mirror for Android: the FM-1's screen, big, sent over USB by the FM-1 Big Screen firmware
  * (the desktop app's src/main.rs). Plug the FM-1 into the phone or tablet, open the app.
+ * A keyboard plugged in too plays the FM-1 through it (Keys): Android lets only one app send to the FM-1.
+ * What it plays shows in the spyglass (Glass), beside the screen.
  */
 public class MainActivity extends Activity {
     static final String WORKBENCH = "https://open.m-vave.com/fm1-workbench";
@@ -58,6 +62,10 @@ public class MainActivity extends Activity {
     private volatile long opened;
     private volatile boolean lost, running;
     private volatile Installer installer;
+    private volatile Keys keys;
+    private volatile boolean keysLost, keysChanged;
+    private final Played played = new Played();
+    private Glass glass;
 
     private Codec.Look look = Codec.Look.COLOR;
     private boolean confirming, full;
@@ -65,8 +73,9 @@ public class MainActivity extends Activity {
 
     private ScreenView screen;
     private LinearLayout bar, panel;
+    private FrameLayout stage;
     private ScrollView panelScroll;
-    private Button lookButton;
+    private Button lookButton, keysButton;
     private TextView stepText;
     private ProgressBar progressBar;
 
@@ -94,13 +103,16 @@ public class MainActivity extends Activity {
         TextView title = text("FM-1 Mirror", 22, TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         bar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        keysButton = button("Keys", v -> pickKeys());
+        bar.addView(keysButton);
+        bar.addView(button("Spyglass", v -> setGlass(glass == null)));
         lookButton = button(look.label, v -> nextLook());
         bar.addView(lookButton);
         Button big = button("Full screen", v -> setFull(true));
         bar.addView(big);
         root.addView(bar);
 
-        FrameLayout stage = new FrameLayout(this);
+        stage = new FrameLayout(this);
         screen = new ScreenView(this);
         screen.setOnClickListener(v -> setFull(!full));
         stage.addView(screen, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -113,12 +125,15 @@ public class MainActivity extends Activity {
         stage.addView(panelScroll, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.addView(stage, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         setContentView(root);
+        if (prefs.getBoolean("glass", false)) setGlass(true);
 
         mm.registerDeviceCallback(new MidiManager.DeviceCallback() {
             @Override
             public void onDeviceRemoved(MidiDeviceInfo info) {
                 Fm1Port l = link;
                 if (l != null && l.info.getId() == info.getId()) lost = true;
+                Keys k = keys;
+                if (k != null && k.info.getId() == info.getId()) keysLost = true;
             }
         }, Fm1Port.callbacks());
     }
@@ -144,7 +159,7 @@ public class MainActivity extends Activity {
 
     /** On a thread of its own: opening waits for Android, and the FM-1 stops sending 3 s after the last hello. */
     private void keepLinked() {
-        long lookedAt = 0, helloAt = 0;
+        long lookedAt = 0, helloAt = 0, keysLookedAt = 0;
         boolean askedIdentity = false, askedBuild = false, first = true;
         while (running) {
             Fm1Port l = link;
@@ -191,8 +206,32 @@ public class MainActivity extends Activity {
                     lost = true;
                 }
             }
+            // The keyboard: only while the FM-1 is here to play.
+            Keys k = keys;
+            boolean again = keysChanged;
+            if (again) {
+                keysChanged = false;
+                keysLookedAt = 0;
+            }
+            if (k != null && (l == null || keysLost || again)) {
+                keys = null;
+                k.close();
+                if (l != null) Keys.silence(l);
+                k = null;
+            }
+            if (l != null && k == null && now - keysLookedAt >= 2000) {
+                keysLookedAt = now;
+                MidiDeviceInfo want = wantedKeys(l.info);
+                if (want != null) {
+                    keysLost = false;
+                    keys = Keys.open(mm, want, l, prefs.getBoolean("keysToOne", true), played);
+                }
+            }
             sleep(100);
         }
+        Keys k = keys;
+        keys = null;
+        if (k != null) k.close();
         Fm1Port l = link;
         link = null;
         if (l != null) l.close();
@@ -204,15 +243,83 @@ public class MainActivity extends Activity {
         return ins != null && !ins.progress.done && ins.progress.error == null;
     }
 
-    /** An FM-1 that names itself first (Open firmware), then one that doesn't (the original). */
+    /**
+     * An FM-1 that names itself first (Open firmware), then one that doesn't (the original), then
+     * anything else that might be one (a "USB MIDI" name may as well be a keyboard's interface).
+     */
     private Fm1Port openFm1() {
         List<MidiDeviceInfo> all = Fm1Port.candidates(mm, true);
-        all.sort((a, b) -> Boolean.compare(Fm1Port.name(a).toLowerCase().contains("composite"), Fm1Port.name(b).toLowerCase().contains("composite")));
+        all.sort((a, b) -> Integer.compare(rank(a), rank(b)));
         for (MidiDeviceInfo info : all) {
             Fm1Port p = Fm1Port.open(mm, info, this::onMessage);
             if (p != null) return p;
         }
         return null;
+    }
+
+    private static int rank(MidiDeviceInfo i) {
+        String n = Fm1Port.name(i).toLowerCase();
+        return n.contains("fm1") || n.contains("fm-1") ? 0 : n.contains("composite") ? 1 : 2;
+    }
+
+    // ---- the keyboard: "" any keyboard plugged in, "-" none, or a device's name
+
+    private MidiDeviceInfo wantedKeys(MidiDeviceInfo fm1) {
+        String from = prefs.getString("keys", "");
+        if (from.equals("-")) return null;
+        for (MidiDeviceInfo i : Keys.sources(mm, fm1))
+            if (from.isEmpty() ? Keys.plugged(i) : Fm1Port.name(i).equals(from)) return i;
+        return null;
+    }
+
+    private void pickKeys() {
+        Fm1Port l = link;
+        List<String> names = new ArrayList<>();
+        for (MidiDeviceInfo i : Keys.sources(mm, l == null ? null : l.info)) names.add(Fm1Port.name(i));
+        List<String> items = new ArrayList<>();
+        items.add("Any keyboard plugged in");
+        items.addAll(names);
+        items.add("None");
+        boolean toOne = prefs.getBoolean("keysToOne", true);
+        items.add(toOne ? "Channels: all to channel 1 (tap to send them as they come)" : "Channels: as they come (tap to move all to channel 1)");
+        int none = items.size() - 2, channels = items.size() - 1;
+        new AlertDialog.Builder(this)
+                .setTitle("Play the FM-1 from")
+                .setItems(items.toArray(new String[0]), (d, which) -> {
+                    if (which == channels) prefs.edit().putBoolean("keysToOne", !toOne).apply();
+                    else prefs.edit().putString("keys", which == 0 ? "" : which == none ? "-" : names.get(which - 1)).apply();
+                    keysChanged = true;
+                })
+                .show();
+    }
+
+    /** The spyglass on or off; it stays as it was next time. */
+    private void setGlass(boolean on) {
+        prefs.edit().putBoolean("glass", on).apply();
+        if (on == (glass != null)) return;
+        if (on) {
+            glass = new Glass(this, played, prefs, () -> setGlass(false));
+            stage.addView(glass);
+            stage.post(() -> {
+                if (glass != null) glass.place(stage.getWidth(), stage.getHeight());
+            });
+        } else {
+            stage.removeView(glass);
+            glass = null;
+        }
+    }
+
+    /** The Keys button says what's playing the FM-1 now. */
+    private void showKeys() {
+        Keys k = keys;
+        String from = prefs.getString("keys", "");
+        String s = k != null ? "Keys: " + shortName(k.info) : from.equals("-") ? "Keys: none" : "Keys…";
+        if (!s.contentEquals(keysButton.getText())) keysButton.setText(s);
+    }
+
+    private static String shortName(MidiDeviceInfo i) {
+        String p = i.getProperties().getString(MidiDeviceInfo.PROPERTY_PRODUCT, "");
+        return p.isEmpty() ? Fm1Port.name(i) : p;
     }
 
     private void onMessage(byte[] m) {
@@ -239,6 +346,7 @@ public class MainActivity extends Activity {
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
+            showKeys();
             update();
             main.postDelayed(this, 300);
         }
@@ -251,6 +359,7 @@ public class MainActivity extends Activity {
         boolean picture = need == null;
         screen.setVisibility(picture ? View.VISIBLE : View.GONE);
         panelScroll.setVisibility(picture ? View.GONE : View.VISIBLE);
+        if (glass != null) glass.setVisibility(picture ? View.VISIBLE : View.GONE);
         if (picture) {
             shown = "";
             return;
