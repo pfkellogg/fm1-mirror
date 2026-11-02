@@ -116,7 +116,7 @@ back to V15 first.
   them back.
 - When a newer Big Screen firmware comes with a new FM-1 Mirror, a button offers to update the FM-1.
 
-**On Android:**
+**On Android** the app is called **FM-1 Mirror + Spyglass**: the same mirror, plus playing and seeing your notes.
 
 - **Keys:** a keyboard plugged in too (through a USB hub) plays the FM-1 through FM-1 Mirror, while
   the screen shows. Android lets only one app at a time send to the FM-1, so this app passes the notes

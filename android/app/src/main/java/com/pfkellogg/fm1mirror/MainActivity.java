@@ -100,7 +100,7 @@ public class MainActivity extends Activity {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(12), dp(8), dp(12), dp(8));
-        TextView title = text("FM-1 Mirror", 22, TEXT);
+        TextView title = text("FM-1 Mirror + Spyglass", 22, TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         bar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         keysButton = button("Keys", v -> pickKeys());
