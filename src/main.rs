@@ -171,7 +171,9 @@ fn is_fm1(name: &str) -> bool {
     // Windows may list it as just "USB-Midi" (a keyboard's "… (USB MIDI)" doesn't count).
     // Its updater, waiting mid-update, may have a name of its own.
     let updater = ["felucca", "sloop", "clipper", "ota", "sinco"].iter().any(|h| n.contains(h));
-    (n.contains("fm1") || n.contains("fm-1") || n.contains("usb composite") || n.starts_with("usb-midi") || n.starts_with("usb midi") || updater)
+    // The Felucca family names itself: JIANT FM "JIANT" (its updater "JIANT Update" is not one to mirror), ChoralRoot.
+    let felucca = (n.contains("jiant") && !n.contains("update")) || n.contains("choralroot");
+    (n.contains("fm1") || n.contains("fm-1") || felucca || n.contains("usb composite") || n.starts_with("usb-midi") || n.starts_with("usb midi") || updater)
         && !n.contains("bridge")
 }
 

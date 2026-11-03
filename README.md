@@ -160,6 +160,8 @@ Quixotic7's chord instrument with 32 lines added. Over USB; "Update FM-1" doesn'
 The second: **JIANT FM + FM-1 Big Screen** ([pfkellogg/JIANT](https://github.com/pfkellogg/JIANT/blob/big-screen/BIG_SCREEN.md)),
 juanjiant's music system (synths, drums, a sequencer, songs), V10.49 with 38 lines added. Also over USB only, and
 "Update FM-1" doesn't show on it either. JIANT has daily builds; ours stays at V10.49 until the screen is added to a newer one. Watch it: [JIANT FM on a Big Screen](https://youtu.be/7o5s0EDJX5c).
+JIANT also says which sound is playing, shown on top of the spyglass, and the app finds it by its own USB name,
+"JIANT" (both since 1.3.0; earlier versions kept waiting for the FM-1).
 
 ## For the curious
 
