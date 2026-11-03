@@ -109,6 +109,8 @@ struct Shared {
     identity: Option<String>,
     /// The firmware build it reports (updater capability), to offer a newer Big Screen.
     build: Option<String>,
+    /// The sound playing, when the firmware says it ("T1 FM6 ICE BELL"): shown after "FM-1" on top.
+    sound: Option<String>,
 }
 
 /// The FM-1's MIDI ports (USB or Bluetooth), open both ways.
@@ -330,6 +332,7 @@ impl App {
                     let mut s = self.shared.lock().unwrap();
                     s.identity = None;
                     s.build = None;
+                    s.sound = None;
                 }
                 self.link = open(self.shared.clone(), self.played.clone(), ctx.clone());
             }
@@ -597,6 +600,17 @@ impl App {
                 None => "FM-1: not found".into(),
             };
             ui.label(egui::RichText::new(status).color(Color32::GRAY));
+            // The sound playing, standing out: big, bold, in gold on a dark chip.
+            if let Some(sound) = self.shared.lock().unwrap().sound.clone() {
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(0x2a, 0x22, 0x0a))
+                    .stroke(egui::Stroke::new(1.5_f32, Color32::from_rgb(0xf2, 0xc0, 0x4c)))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin::symmetric(10, 3))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(format!("\u{266a} {sound}")).size(20.0).strong().color(Color32::from_rgb(0xf2, 0xc0, 0x4c)));
+                    });
+            }
         });
     }
 }
@@ -645,6 +659,12 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                     }
                     _ => {}
                 }
+                if let Some(name) = screen::sound(m) {
+                    if s.sound.as_deref() != Some(name.as_str()) {
+                        s.sound = (!name.is_empty()).then_some(name);
+                        ctx.request_repaint();
+                    }
+                }
                 if s.screen.apply(m) {
                     s.last = Some(Instant::now());
                     s.changed = true;
@@ -674,11 +694,13 @@ impl App {
         let d = self.glass_size.unwrap_or(if room { (side - 24.0).min(380.0) } else { area.width().min(area.height()) * 0.38 });
         let d = d.clamp(140.0, area.width().min(area.height()));
         let (fx, fy) = self.glass_at.unwrap_or(if room { ((area.width() - side / 2.0) / area.width(), 0.5) } else { (1.0 - (d / 2.0 + 16.0) / area.width(), (d / 2.0 + 16.0) / area.height()) });
-        let c = Pos2::new(area.left() + fx * area.width(), area.top() + fy * area.height());
+        // Kept whole inside the area, also after a resize (of it or the window) that would push it past an edge.
+        let inside = |c: Pos2| c.clamp(area.min + vec2(d, d) / 2.0, area.max - vec2(d, d) / 2.0);
+        let c = inside(Pos2::new(area.left() + fx * area.width(), area.top() + fy * area.height()));
         let r = ui.interact(Rect::from_center_size(c, vec2(d, d)), ui.id().with("spyglass"), egui::Sense::drag());
         let mut moved = false;
         if r.dragged() {
-            let c = (c + r.drag_delta()).clamp(area.min + vec2(d, d) / 2.0, area.max - vec2(d, d) / 2.0);
+            let c = inside(c + r.drag_delta());
             self.glass_at = Some(((c.x - area.left()) / area.width(), (c.y - area.top()) / area.height()));
             moved = true;
         }
@@ -692,7 +714,8 @@ impl App {
         if r.drag_stopped() || (moved && !r.dragged()) {
             self.store();
         }
-        self.glass.draw(ui.painter(), c, d);
+        let sound = self.shared.lock().unwrap().sound.clone();
+        self.glass.draw(ui.painter(), c, d, sound.as_deref());
     }
 }
 

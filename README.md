@@ -128,7 +128,9 @@ back to V15 first.
   for its chord engine); or **as they come**. SysEx is never passed on. If another app (MIDI Bridge, Synth
   Spyglass) also plays the FM-1 from the same keyboard, set Keys to **None**, or you'll hear notes twice.
 - **Spyglass**: a round brass eyepiece over the screen with the note or chord you play, on a staff,
-  and how hard you hit the key. Drag it to move it; scroll over it to resize it; **Spyglass** in the
+  and how hard you hit the key. On top of it, the **sound playing** (`T1 FM6 ICE BELL`), when the firmware
+  says it: [JIANT FM + Big Screen](https://github.com/pfkellogg/JIANT/blob/big-screen/BIG_SCREEN.md) does,
+  others don't yet (then there's nothing on top). Drag it to move it; scroll over it to resize it; **Spyglass** in the
   bar puts it away. The FM-1's own keys show too, once **KEY OUT** is on: on the FM-1, press **SEQ**,
   turn **ALGO** to page **6/8 MIDI TRACK**, and turn **K4 (KEY OUT)** to **ON** (K3, OUT PORT, on
   USB+BLE).
@@ -167,6 +169,8 @@ juanjiant's music system (synths, drums, a sequencer, songs), V10.49 with 38 lin
 - `src/screen.rs`: the screen messages. The computer sends `F0 7D 'F' 'S' 00 F7` about once a second
   (`01` to have the whole screen sent again); the FM-1 sends each row it paints as
   `F0 7D 'F' 'S' 01 row col <runs> F7`, each run a count and an RGB565 colour.
+  Firmware that knows it also sends the sound playing as `F0 7D 'F' 'S' 02 <name> F7` (ASCII), after each
+  hello and whenever it changes; `F0 7D 'F' 'S' 02 F7` asks for only that, without the screen.
 - `src/install.rs`: the installer, a port of M-VAVE's own web updater (`sdk/WebUpdate.js` in their
   source): the FM-1's updater asks for each block of the firmware and checks it itself.
 - `firmware/`: the Big Screen firmware package this app installs, and its build identity. Built from

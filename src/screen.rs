@@ -4,12 +4,24 @@
 //! about once a second; while it does, the FM-1 sends every row it paints as F0 7D 'F' 'S' 01,
 //! the row and first column (two 7-bit bytes each), then runs of four bytes: a count, and the
 //! RGB565 colour in 7, 7 and 2 bits. (Rows are at least ten bytes, hellos six.)
+//! Firmware that knows it also sends the sound playing, F0 7D 'F' 'S' 02 and its name in ASCII
+//! ("T1 FM6 ICE BELL"), after each hello and whenever it changes.
 
 pub const SIZE: usize = 240;
 pub const HELLO: [u8; 6] = [0xf0, 0x7d, b'F', b'S', 0, 0xf7];
 /// Hello, and send the whole screen again.
 pub const HELLO_ALL: [u8; 6] = [0xf0, 0x7d, b'F', b'S', 1, 0xf7];
 const ROW: [u8; 5] = [0xf0, 0x7d, b'F', b'S', 1];
+const SOUND: [u8; 5] = [0xf0, 0x7d, b'F', b'S', 2];
+
+/// The sound playing, if this is the FM-1 saying it (an empty name: none).
+pub fn sound(m: &[u8]) -> Option<String> {
+    if m.len() < 6 || m[..5] != SOUND || m[m.len() - 1] != 0xf7 {
+        return None;
+    }
+    let name: String = m[5..m.len() - 1].iter().filter(|b| (0x20..0x7f).contains(*b)).map(|&b| b as char).collect();
+    Some(name.split_whitespace().collect::<Vec<_>>().join(" "))
+}
 
 pub struct Screen {
     /// RGB565, row by row.
