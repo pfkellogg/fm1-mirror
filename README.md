@@ -108,8 +108,11 @@ If the computer keeps losing the FM-1 during Step 2:
   through the update, so another app can grab it.
 - Plug the FM-1 straight into the computer, not through a hub, with a USB data cable.
 
-Coming from M-VAVE's V16 firmware is fine: Step 1 replaces it completely, so there's no need to go
-back to V15 first.
+Coming from M-VAVE's **V16** firmware: the FM-1 keeps V16's updater, which names itself `ota-FM-1_016`. FM-1 Mirror
+1.3.0 / FM-1 Mirror + Spyglass 1.4.0 and later find it; **older versions looked only for V15's updater**, said the
+connection was lost partway through Step 2, and left the FM-1 waiting in its updater (M-Upgrade or M-VAVE's page
+finishes it). With an older version, put the original V15 back first (Recovery & force update › Restore original V15).
+Thanks to a viewer who reported it.
 
 ## Using FM-1 Mirror
 

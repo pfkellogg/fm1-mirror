@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 pub const PACKAGE: &[u8] = include_bytes!("../firmware/FM1_BIG_SCREEN_V14.fwsc");
 const BUILD_ID: &str = include_str!("../firmware/FM1_BIG_SCREEN_V14.build-identity.json");
 /// The package uses M-VAVE's own updater program, which names itself this while it works.
-const LOADER_IDENTITY: &str = "ota-FM-1_015";
+/// The FM-1's updater names itself "ota-FM-1_" and the version of the start-up part it came with: "ota-FM-1_015" on a
+/// unit from V15, "ota-FM-1_016" from V16 (M-VAVE's FM-1.fwsc since 2026-10-21). Any of them is the FM-1's updater.
+const LOADER_IDENTITY: &str = "ota-FM-1_";
 const ENTER_LOADER: [u8; 6] = [0xf0, 0x22, 0x24, 0x35, 0x7f, 0xf7];
 
 pub fn build_id() -> String {
@@ -242,7 +244,7 @@ fn find(want: Option<&str>, updater: bool, wait: Duration) -> Result<Option<(Lin
         for name in candidates(updater) {
             if let Some(mut link) = Link::open(&name) {
                 if let Some(id) = link.identity() {
-                    if want.is_none_or(|w| w == id) {
+                    if want.is_none_or(|w| same_identity(w, &id)) {
                         found.push((link, id));
                     }
                 }
@@ -259,6 +261,15 @@ fn find(want: Option<&str>, updater: bool, wait: Duration) -> Result<Option<(Lin
 }
 
 /// The FM-1's updater, waiting for firmware (an update stopped partway, or was started elsewhere).
+/// The identity looked for: exact, or (ending in "_") that model with any version, "ota-FM-1_015" or "ota-FM-1_016".
+fn same_identity(want: &str, id: &str) -> bool {
+    if !want.ends_with('_') {
+        return want == id;
+    }
+    let version = id.strip_prefix(want).unwrap_or("");
+    !version.is_empty() && version.chars().all(|c| c.is_ascii_digit())
+}
+
 pub fn is_updater(id: &str) -> bool {
     id.to_lowercase().starts_with("ota-")
 }
@@ -434,5 +445,20 @@ mod real_replies {
         let (c, d) = super::parse(&m).expect("parses");
         assert_eq!((c, d.len()), (49, 47));
         assert_eq!(&d[..4], b"FMC1");
+    }
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    #[test]
+    fn the_updater_from_v15_or_v16() {
+        assert!(same_identity(LOADER_IDENTITY, "ota-FM-1_015"));
+        assert!(same_identity(LOADER_IDENTITY, "ota-FM-1_016")); // a unit that came from V16 (a viewer's report, 2026-11-03)
+        assert!(!same_identity(LOADER_IDENTITY, "ota-FM-1_"));
+        assert!(!same_identity(LOADER_IDENTITY, "ota-FM-1_900x"));
+        assert!(!same_identity(LOADER_IDENTITY, "ota-SMK-37 Pro_016"));
+        assert!(same_identity("FM1_COMMUNITY_V14", "FM1_COMMUNITY_V14"));
+        assert!(!same_identity("FM1_COMMUNITY_V14", "FM1_COMMUNITY_V15"));
     }
 }
