@@ -24,7 +24,7 @@ use eframe::egui::{self, vec2, Align2, Color32, ColorImage, FontId, Pos2, Rect, 
 use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use serde_json::{json, Value};
 
-use screen::{Screen, HELLO, HELLO_ALL, SIZE};
+use screen::{Screen, ASK_INFO, HELLO, HELLO_ALL, SIZE};
 
 const APP_NAME: &str = "FM-1 Mirror";
 /// How long the buttons stay after the mouse last moved.
@@ -109,6 +109,8 @@ struct Shared {
     identity: Option<String>,
     /// The firmware build it reports (updater capability), to offer a newer Big Screen.
     build: Option<String>,
+    /// What a Felucca-family firmware says it is ("FELUCCA SLOOP 2.8.4"): its USB name may only say "Felucca".
+    firmware: Option<String>,
     /// The sound playing, when the firmware says it ("T1 FM6 ICE BELL"): shown after "FM-1" on top.
     sound: Option<String>,
 }
@@ -140,7 +142,7 @@ impl Drop for Link {
 fn hellos(output: Arc<Mutex<MidiOutputConnection>>, stop: Arc<std::sync::atomic::AtomicBool>, lost: Arc<std::sync::atomic::AtomicBool>) {
     use std::sync::atomic::Ordering;
     let opened = Instant::now();
-    let (mut asked_identity, mut asked_build, mut first) = (false, false, true);
+    let (mut asked_identity, mut asked_build, mut asked_info, mut first) = (false, false, false, true);
     let mut hello_at: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
         if hello_at.is_none_or(|t| t.elapsed() >= HELLO_EVERY) {
@@ -158,6 +160,10 @@ fn hellos(output: Arc<Mutex<MidiOutputConnection>>, stop: Arc<std::sync::atomic:
         if !asked_build && opened.elapsed() > Duration::from_secs(3) {
             asked_build = true;
             let _ = output.lock().unwrap().send(&install::frame(49, &[]));
+        }
+        if !asked_info && opened.elapsed() > Duration::from_secs(4) {
+            asked_info = true;
+            let _ = output.lock().unwrap().send(&ASK_INFO);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -334,6 +340,7 @@ impl App {
                     let mut s = self.shared.lock().unwrap();
                     s.identity = None;
                     s.build = None;
+                    s.firmware = None;
                     s.sound = None;
                 }
                 self.link = open(self.shared.clone(), self.played.clone(), ctx.clone());
@@ -597,7 +604,12 @@ impl App {
                     self.confirming = true;
                 }
             }
+            let (firmware, identity) = {
+                let s = self.shared.lock().unwrap();
+                (s.firmware.clone(), s.identity.clone())
+            };
             let status = match &self.link {
+                Some(_) if firmware.is_some() => format!("FM-1: {}", screen::firmware_name(firmware.as_deref().unwrap_or(""), identity.as_deref())),
                 Some(l) => format!("FM-1: {}", l.name),
                 None => "FM-1: not found".into(),
             };
@@ -660,6 +672,10 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                         ctx.request_repaint();
                     }
                     _ => {}
+                }
+                if let Some(info) = screen::firmware_info(m) {
+                    s.firmware = Some(info);
+                    ctx.request_repaint();
                 }
                 if let Some(name) = screen::sound(m) {
                     if s.sound.as_deref() != Some(name.as_str()) {

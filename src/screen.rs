@@ -13,6 +13,30 @@ pub const HELLO: [u8; 6] = [0xf0, 0x7d, b'F', b'S', 0, 0xf7];
 pub const HELLO_ALL: [u8; 6] = [0xf0, 0x7d, b'F', b'S', 1, 0xf7];
 const ROW: [u8; 5] = [0xf0, 0x7d, b'F', b'S', 1];
 const SOUND: [u8; 5] = [0xf0, 0x7d, b'F', b'S', 2];
+/// Asks a firmware of the Felucca family what it is (its editor's INFO); others don't answer.
+pub const ASK_INFO: [u8; 6] = [0xf0, 0x7d, b'F', b'L', 1, 0xf7];
+const INFO: [u8; 5] = [0xf0, 0x7d, b'F', b'L', 1];
+
+/// The firmware's own name, if this is its answer to `ASK_INFO`: "FELUCCA SLOOP 2.8.4", then other things.
+pub fn firmware_info(m: &[u8]) -> Option<String> {
+    if m.len() < 7 || m[..5] != INFO || m[m.len() - 1] != 0xf7 {
+        return None;
+    }
+    let name: String = m[5..m.len() - 1].iter().take_while(|&&b| b != 0).filter(|b| (0x20..0x7f).contains(*b)).map(|&b| b as char).collect();
+    (!name.trim().is_empty()).then(|| name.trim().to_string())
+}
+
+/// The name to show. SLOOP and Skiff keep Felucca's USB name, and their answers start with "FELUCCA " for the web
+/// tools: "FELUCCA SLOOP 2.8.4" is SLOOP, and "FELUCCA v2.1.1" is Skiff when its identity is FM-1_7xx, else Felucca.
+pub fn firmware_name(info: &str, identity: Option<&str>) -> String {
+    let Some(rest) = info.strip_prefix("FELUCCA ") else { return info.to_string() };
+    let bare_version = rest.strip_prefix('v').is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()));
+    match (bare_version, identity.is_some_and(|id| id.starts_with("FM-1_7"))) {
+        (true, true) => format!("Skiff {rest}"),
+        (true, false) => format!("Felucca {rest}"),
+        _ => rest.to_string(),
+    }
+}
 
 /// The sound playing, if this is the FM-1 saying it (an empty name: none).
 pub fn sound(m: &[u8]) -> Option<String> {
@@ -75,6 +99,25 @@ pub fn rgb(c: u16) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_firmware_says_its_name() {
+        let mut m = INFO.to_vec();
+        m.extend_from_slice(b"FELUCCA SLOOP 2.8.4\0");
+        m.extend_from_slice(&[6, 40, 12, 0xf7]);
+        assert_eq!(firmware_info(&m).as_deref(), Some("FELUCCA SLOOP 2.8.4"));
+        assert_eq!(firmware_info(&HELLO), None);
+    }
+
+    #[test]
+    fn firmware_names_past_felucca_usb_name() {
+        assert_eq!(firmware_name("FELUCCA SLOOP 2.8.4", Some("FM-1_928")), "SLOOP 2.8.4");
+        assert_eq!(firmware_name("FELUCCA ChoralRoot 0.29", Some("FM-1_920")), "ChoralRoot 0.29");
+        assert_eq!(firmware_name("JIANT v0.9.18", Some("FM-1_900")), "JIANT v0.9.18");
+        assert_eq!(firmware_name("FELUCCA v2.1.1", Some("FM-1_700")), "Skiff v2.1.1");
+        assert_eq!(firmware_name("FELUCCA v1.5", Some("FM-1_915")), "Felucca v1.5");
+        assert_eq!(firmware_name("FELUCCA v1.5", None), "Felucca v1.5");
+    }
 
     /// The firmware's encoding, for a row segment.
     fn encode(y: usize, x: usize, px: &[u16]) -> Vec<u8> {
