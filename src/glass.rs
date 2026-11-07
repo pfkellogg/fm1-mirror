@@ -50,7 +50,11 @@ pub struct Glass {
     armed: bool,
     settling: Vec<u8>,
     since: Option<Instant>,
+    released: Option<Instant>,
 }
+
+/// How long a note or chord stays after the last key comes up, then the glass is empty again.
+const HOLD: f64 = 3.0;
 
 impl Glass {
     /// True when there's something new to draw.
@@ -81,12 +85,19 @@ impl Glass {
                 }
             }
         }
+        if self.shown.is_none() || !played.keys_down().is_empty() {
+            self.released = None;
+        } else if self.released.get_or_insert_with(Instant::now).elapsed().as_secs_f64() >= HOLD {
+            self.shown = None;
+            self.released = None;
+            changed = true;
+        }
         changed
     }
 
-    /// Still settling a chord: draw again soon.
+    /// Still settling a chord, or waiting to empty the glass: draw again soon.
     pub fn busy(&self) -> bool {
-        self.armed
+        self.armed || self.released.is_some()
     }
 
     /// The eyepiece centred on `c`, `d` across; on top, the sound playing when the FM-1 says it.
@@ -131,7 +142,7 @@ impl Glass {
             if g.size().x <= room { g } else { p.layout_no_wrap(text, FontId::proportional(size * room / g.size().x), TEXT) }
         };
         let (name, detail, keys, vel) = match &self.shown {
-            None => ("♪".to_string(), "play a note".to_string(), vec![], None),
+            None => (String::new(), "play a note".to_string(), vec![], None),
             Some(Shown::Note(n, vel)) => {
                 let mut detail = format!("{}   {:.0} Hz", note_name(*n), note_hz(*n));
                 if let Some(v) = vel {
@@ -141,21 +152,17 @@ impl Glass {
             }
             Some(Shown::Chord { keys, name, held }) => (name.clone(), held.clone(), keys.clone(), None),
         };
-        // With notes the staff is what's read: the name small above it, the staff as big as the glass allows.
-        let playing = !keys.is_empty();
-        let size = match (&self.shown, playing) {
-            (_, false) => d * 0.24,
-            (Some(Shown::Chord { .. }), _) => d * 0.10,
-            _ => d * 0.115,
-        };
-        let g = fit(name, size, d * 0.72);
-        p.galley(c + vec2(0.0, if playing { -d * 0.215 } else { -d * 0.165 }) - g.size() / 2.0, g, TEXT);
-        if playing {
-            let w = d * 0.45;
-            staff::draw(p, Rect::from_center_size(c + vec2(0.0, d * 0.087), vec2(w, w * 1.06)), &keys, GLASS, TEXT);
+        // The staff is what's read: the name small above it, the staff as big as the glass allows. With nothing
+        // played the staves stay, empty, over "play a note".
+        let size = if matches!(self.shown, Some(Shown::Chord { .. })) { d * 0.10 } else { d * 0.115 };
+        if !name.is_empty() {
+            let g = fit(name, size, d * 0.72);
+            p.galley(c + vec2(0.0, -d * 0.215) - g.size() / 2.0, g, TEXT);
         }
+        let w = d * 0.45;
+        staff::draw(p, Rect::from_center_size(c + vec2(0.0, d * 0.087), vec2(w, w * 1.06)), &keys, GLASS, TEXT);
         let g = fit(detail, (d * 0.055).max(12.0), d * 0.54);
-        p.galley(c + vec2(0.0, if playing { d * 0.365 } else { d * 0.325 }) - g.size() / 2.0, g, TEXT);
+        p.galley(c + vec2(0.0, d * 0.365) - g.size() / 2.0, g, TEXT);
         // How hard the key was hit: a short brass bar under it, full at 127.
         if let Some(v) = vel {
             let (w, h) = (d * 0.26, (d * 0.012).max(3.0));
@@ -198,4 +205,29 @@ fn lens(p: &Painter, c: Pos2, r: f32, d: f32) {
     }
     p.circle_stroke(c, glass_r, Stroke::new((d * 0.004).max(1.0), BRASS_SHADOW));
     p.circle_stroke(c, r - 0.5, Stroke::new(1.0_f32, BRASS_SHADOW));
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+    use crate::keys::{Parser, Played};
+    use std::time::Duration;
+
+    #[test]
+    fn the_last_note_goes_after_the_keys_are_up() {
+        let (mut p, mut played, mut g) = (Parser::default(), Played::default(), Glass::default());
+        p.feed(&[0x90, 60, 90], &mut played);
+        g.tick(&played);
+        assert!(g.shown.is_some());
+        assert!(g.released.is_none(), "a held key stays");
+        p.feed(&[0x80, 60, 0], &mut played);
+        g.tick(&played);
+        assert!(g.shown.is_some() && g.busy(), "it stays a while, and the glass keeps looking");
+        g.released = Some(Instant::now() - Duration::from_secs_f64(HOLD + 0.1));
+        assert!(g.tick(&played));
+        assert!(g.shown.is_none());
+        p.feed(&[0x90, 64, 90], &mut played);
+        g.tick(&played);
+        assert!(g.shown.is_some() && g.released.is_none(), "a new note shows again");
+    }
 }
