@@ -144,6 +144,7 @@ If M-Upgrade says "invalid device information", unplug other MIDI gear such as a
   turn **ALGO** to page **6/8 MIDI TRACK**, and turn **K4 (KEY OUT)** to **ON** (K3, OUT PORT, on
   USB+BLE).
   From 1.3.2 a note or chord clears 3 seconds after the last key comes up, leaving empty staves over "play a note".
+  From 1.3.3 it also shows the **waveform** of the FM-1's real sound beside the staff, over USB (not Bluetooth). A Mac asks once to use the microphone, because it counts any audio input as one: FM-1 Mirror listens only to the FM-1.
 - **No sound?** A keyboard's volume slider (a Keystation has one) sets the FM-1's volume: keep it up.
 - **The bottom bar** names the firmware the FM-1 says it runs ("FM-1: SLOOP 2.8.4"), from 1.3.1. A Mac can remember an older name for the FM-1's port ("ChoralRoot FM-1" on an FM-1 now running SLOOP), and earlier versions showed that. Firmware that doesn't say, like M-VAVE's Open, still shows the port's name.
 

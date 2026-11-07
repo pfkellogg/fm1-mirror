@@ -13,6 +13,7 @@ mod glass;
 mod glyphs;
 mod install;
 mod keys;
+mod scope;
 mod screen;
 mod smooth;
 mod staff;
@@ -228,6 +229,8 @@ struct App {
     confirming: bool,
     /// What's been played (the keyboard, and the FM-1's own keys), for the spyglass.
     played: Arc<Mutex<keys::Played>>,
+    sound_in: Arc<Mutex<scope::Ring>>,
+    listener: Option<scope::Listener>,
     keys: Option<keys::Keys>,
     /// "" any keyboard plugged in, "-" none, or a port's name; and everything to channel 1.
     keys_choice: String,
@@ -312,6 +315,8 @@ impl App {
             install: None,
             confirming: false,
             played: Arc::default(),
+            sound_in: Arc::default(),
+            listener: None,
             keys: None,
             keys_choice: saved["keys"].as_str().unwrap_or("").to_string(),
             // (an older "all to channel 1" switch carries over)
@@ -387,6 +392,11 @@ impl App {
                 self.link = open(self.shared.clone(), self.played.clone(), ctx.clone());
             }
             self.keep_keys(ctx);
+            if self.glass_on && self.listener.as_ref().is_none_or(|l| l.dead()) {
+                self.listener = scope::open(self.sound_in.clone());
+            } else if !self.glass_on {
+                self.listener = None;
+            }
         }
         ctx.request_repaint_after(HELLO_EVERY);
     }
@@ -774,7 +784,8 @@ impl App {
     /// The spyglass over the screen area: the first time in the room beside the FM-1's (square,
     /// centred) screen if there's enough, else top right over it. Drag to move; drag the grip or scroll to resize.
     fn spyglass(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, area: Rect) {
-        if self.glass.tick(&self.played.lock().unwrap()) || self.glass.busy() {
+        let (hearing, wave) = hear(&self.sound_in, &self.glass);
+        if self.glass.tick(&self.played.lock().unwrap()) || self.glass.busy() || wave.is_some() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         let side = (area.width() - area.height()).max(0.0) / 2.0;
@@ -813,7 +824,7 @@ impl App {
             self.store();
         }
         let sound = self.shared.lock().unwrap().sound.clone();
-        self.glass.draw(ui.painter(), c, d, sound.as_deref());
+        self.glass.draw(ui.painter(), c, d, sound.as_deref(), hearing, wave.as_deref());
         if ui.rect_contains_pointer(Rect::from_center_size(c, vec2(d, d))) || grip.dragged() {
             glass::draw_grip(ui.painter(), grip_at, grip.hovered() || grip.dragged());
         }
@@ -835,13 +846,19 @@ impl App {
         if let Some(at) = at {
             builder = builder.with_position(at);
         }
-        let (float, played, shared) = (self.float.clone(), self.played.clone(), self.shared.clone());
-        ctx.show_viewport_deferred(egui::ViewportId::from_hash_of("spyglass"), builder, move |ctx, _| float_ui(ctx, &float, &played, &shared));
+        let (float, played, shared, sound_in) = (self.float.clone(), self.played.clone(), self.shared.clone(), self.sound_in.clone());
+        ctx.show_viewport_deferred(egui::ViewportId::from_hash_of("spyglass"), builder, move |ctx, _| float_ui(ctx, &float, &played, &shared, &sound_in));
     }
 }
 
+/// Whether the FM-1's sound is coming in, and its wave for the note on `glass`.
+fn hear(sound_in: &Mutex<scope::Ring>, glass: &glass::Glass) -> (bool, Option<Vec<f32>>) {
+    let ring = sound_in.lock().unwrap();
+    (ring.listening(), glass.hz().and_then(|hz| ring.wave(hz)))
+}
+
 /// One frame of the floating spyglass: drag it to move the window, the grip or a scroll to resize it.
-fn float_ui(ctx: &egui::Context, float: &Mutex<Float>, played: &Mutex<keys::Played>, shared: &Mutex<Shared>) {
+fn float_ui(ctx: &egui::Context, float: &Mutex<Float>, played: &Mutex<keys::Played>, shared: &Mutex<Shared>, sound_in: &Mutex<scope::Ring>) {
     ctx.request_repaint_after(Duration::from_millis(50));
     let mut guard = float.lock().unwrap();
     let f = &mut *guard;
@@ -882,7 +899,8 @@ fn float_ui(ctx: &egui::Context, float: &Mutex<Float>, played: &Mutex<keys::Play
         if grip.hovered() || grip.dragged() {
             ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
         }
-        f.glass.draw(ui.painter(), c, d, sound.as_deref());
+        let (hearing, wave) = hear(sound_in, &f.glass);
+        f.glass.draw(ui.painter(), c, d, sound.as_deref(), hearing, wave.as_deref());
         if ui.rect_contains_pointer(area) || grip.dragged() {
             glass::draw_grip(ui.painter(), grip_at, grip.hovered() || grip.dragged());
         }

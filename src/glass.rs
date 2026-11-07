@@ -11,6 +11,8 @@ use crate::chord::{chord_name, interval_name, is_pair, note_hz, note_name, CHORD
 use crate::keys::Played;
 use crate::staff;
 
+const WAVE: Color32 = Color32::from_rgb(80, 200, 255);
+const WAVE_QUIET: Color32 = Color32::from_rgb(110, 120, 130);
 const BRASS: Color32 = Color32::from_rgb(0xc9, 0x9a, 0x45);
 const BRASS_LIGHT: Color32 = Color32::from_rgb(0xf3, 0xd6, 0x8a);
 const BRASS_DARK: Color32 = Color32::from_rgb(0x8a, 0x62, 0x24);
@@ -95,13 +97,23 @@ impl Glass {
         changed
     }
 
+    /// What the wave is triggered on: the note showing, or a chord's lowest.
+    pub fn hz(&self) -> Option<f64> {
+        match &self.shown {
+            Some(Shown::Note(n, _)) => Some(note_hz(*n)),
+            Some(Shown::Chord { keys, .. }) => keys.first().map(|&n| note_hz(n)),
+            None => None,
+        }
+    }
+
     /// Still settling a chord, or waiting to empty the glass: draw again soon.
     pub fn busy(&self) -> bool {
         self.armed || self.released.is_some()
     }
 
     /// The eyepiece centred on `c`, `d` across; on top, the sound playing when the FM-1 says it.
-    pub fn draw(&self, p: &Painter, c: Pos2, d: f32, sound: Option<&str>) {
+    /// `hearing`: the FM-1's sound is coming in, so the staff moves left for `wave`, its waveform.
+    pub fn draw(&self, p: &Painter, c: Pos2, d: f32, sound: Option<&str>, hearing: bool, wave: Option<&[f32]>) {
         lens(p, c, d / 2.0, d);
         if let Some(sound) = sound {
             // The sound's name across the top of the glass: warm gold letters, a little spaced, on a rounded band of
@@ -159,8 +171,24 @@ impl Glass {
             let g = fit(name, size, d * 0.72);
             p.galley(c + vec2(0.0, -d * 0.215) - g.size() / 2.0, g, TEXT);
         }
-        let w = d * 0.45;
-        staff::draw(p, Rect::from_center_size(c + vec2(0.0, d * 0.087), vec2(w, w * 1.06)), &keys, GLASS, TEXT);
+        let w = d * if hearing { 0.42 } else { 0.45 };
+        let staff_x = if hearing { -d * 0.165 } else { 0.0 };
+        staff::draw(p, Rect::from_center_size(c + vec2(staff_x, d * 0.087), vec2(w, w * 1.06)), &keys, GLASS, TEXT);
+        if hearing {
+            // The FM-1's real waveform, right of the staff; a flat grey line while it's quiet.
+            let r = Rect::from_min_max(c + vec2(d * 0.075, -d * 0.02), c + vec2(d * 0.355, d * 0.19));
+            let width = (d * 0.006).max(2.0);
+            match wave {
+                Some(w) if w.len() > 1 => {
+                    let at = |i: usize, s: f32| Pos2::new(r.left() + r.width() * i as f32 / (w.len() - 1) as f32, r.center().y - s * r.height() / 2.0);
+                    let line = w.iter().enumerate().map(|(i, &s)| at(i, s)).collect();
+                    p.add(egui::Shape::line(line, Stroke::new(width, WAVE)));
+                }
+                _ => {
+                    p.line_segment([r.left_center(), r.right_center()], Stroke::new(width, WAVE_QUIET));
+                }
+            }
+        }
         let g = fit(detail, (d * 0.055).max(12.0), d * 0.54);
         p.galley(c + vec2(0.0, d * 0.365) - g.size() / 2.0, g, TEXT);
         // How hard the key was hit: a short brass bar under it, full at 127.

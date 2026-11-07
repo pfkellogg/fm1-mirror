@@ -28,6 +28,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>$VER</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>The spyglass shows the waveform of the FM-1's own sound, which arrives over its USB cable as an audio input. FM-1 Mirror listens only to the FM-1.</string>
 </dict>
 </plist>
 PLIST
