@@ -114,6 +114,10 @@ connection was lost partway through Step 2, and left the FM-1 waiting in its upd
 finishes it). With an older version, put the original V15 back first (Recovery & force update › Restore original V15).
 Thanks to a viewer who reported it.
 
+Tested on a real FM-1 that had been on V16 (2026-11-04): V16, then Official Open, then FM-1 Mirror 1.3.0 installed Big Screen with no lost connection. Installing Big Screen replaces V16: V16 is closed source, so the screen can't be added to it. The results, and two M-Upgrade problems with their fixes, are in [docs/V16-TEST.md](docs/V16-TEST.md). Watch it: [Every M-VAVE FM-1 Firmware Explained, and What Happened When We Tested V16](https://youtu.be/WOjvFdw5KMA).
+
+If M-Upgrade says "invalid device information", unplug other MIDI gear such as a 2-port keyboard, then restart M-Upgrade.
+
 ## Using FM-1 Mirror
 
 - **F**: full screen (Esc to leave). Drag the window to another monitor or a TV first if you like.
@@ -138,6 +142,7 @@ Thanks to a viewer who reported it.
   turn **ALGO** to page **6/8 MIDI TRACK**, and turn **K4 (KEY OUT)** to **ON** (K3, OUT PORT, on
   USB+BLE).
 - **No sound?** A keyboard's volume slider (a Keystation has one) sets the FM-1's volume: keep it up.
+- **The bottom bar** names the firmware the FM-1 says it runs ("FM-1: SLOOP 2.8.4"), in the version after 1.3.0. A Mac can remember an older name for the FM-1's port ("ChoralRoot FM-1" on an FM-1 now running SLOOP), and 1.3.0 showed that. Firmware that doesn't say, like M-VAVE's Open, still shows the port's name.
 
 **Over Bluetooth (Mac):** the FM-1's Bluetooth MIDI has to be on (on the FM-1, hold **HOME** and
 press **GLO**: **K1 BLUETOOTH ON**, **K3 BLE ROLE DEVICE**). Then once, in **Audio MIDI Setup**,
@@ -171,6 +176,10 @@ illuminus5's six-track groovebox, Skiff 2.1.1 with about 37 lines added, and the
 All three come from Leo Kuroshita's Felucca, and so do 23 of the 25 most popular FM-1 firmwares
 ([FIRMWARE_FAMILY.md](https://github.com/pfkellogg/skiff/blob/big-screen/FIRMWARE_FAMILY.md)). Watch it: [Skiff on a Big Screen + the FM-1 Firmware Family Tree](https://youtu.be/lmMT-FtAoSE).
 
+The fourth: **SLOOP + FM-1 Big Screen**, isod89's live groovebox and the most starred FM-1 firmware, SLOOP 2.8.4 with about 40 lines added, and the sound playing on the spyglass too. Tested on a real FM-1 (2026-11-04) with FM-1 Mirror on a Mac, but **not released yet**. Watch it: [SLOOP on a Big Screen](https://youtu.be/Pd4Bm6JvtkU).
+
+With Keys on SLOOP, a keyboard plays track 1 only: FM-1 Mirror sends it on channel 1, while the FM-1's own keys play the selected track. Tested 2026-11-04: on track 1 both play the same sound. To have the keyboard follow the selected track, SLOOP's manual gives GLO > MIDI 2 > IN = CH 1 (not tested yet).
+
 ## For the curious
 
 - `src/keys.rs`: Keys (the keyboard passed on to the FM-1) and what's been played; `src/glass.rs`:
@@ -181,6 +190,8 @@ All three come from Leo Kuroshita's Felucca, and so do 23 of the 25 most popular
   `F0 7D 'F' 'S' 01 row col <runs> F7`, each run a count and an RGB565 colour.
   Firmware that knows it also sends the sound playing as `F0 7D 'F' 'S' 02 <name> F7` (ASCII), after each
   hello and whenever it changes; `F0 7D 'F' 'S' 02 F7` asks for only that, without the screen.
+  `F0 7D 'F' 'L' 01 F7` asks a firmware of the Felucca family its name (its editor's INFO): the answer starts with
+  `FELUCCA SLOOP 2.8.4`, or `FELUCCA v2.1.1` from Skiff, told from Felucca by its identity (`FM-1_7xx`).
 - `src/install.rs`: the installer, a port of M-VAVE's own web updater (`sdk/WebUpdate.js` in their
   source): the FM-1's updater asks for each block of the firmware and checks it itself.
 - `firmware/`: the Big Screen firmware package this app installs, and its build identity. Built from
