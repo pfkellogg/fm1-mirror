@@ -562,7 +562,8 @@ impl App {
                 }
                 Need::Other(id) => {
                     heading(ui, "This FM-1 runs another firmware");
-                    body(ui, &format!("It says it is \"{id}\". Big Screen installs over M-VAVE's Official Open firmware, so that comes first."));
+                    body(ui, &format!("It says it is \"{id}\". It's fine to keep using it, and nothing needs changing. This firmware doesn't send its screen, so it can't show here."));
+                    body(ui, "Only if you want to see the screen here: Big Screen replaces this firmware, and it installs over M-VAVE's Official Open firmware, so that comes first.");
                     step1(ui);
                 }
                 Need::Bluetooth => {
@@ -571,7 +572,8 @@ impl App {
                 }
                 Need::Unknown(name) => {
                     heading(ui, "No screen from the FM-1 yet");
-                    body(ui, &format!("Connected to \"{name}\", but it isn't sending its screen and didn't say which firmware it runs. With M-VAVE's original firmware:"));
+                    body(ui, &format!("Connected to \"{name}\", but it isn't sending its screen and didn't say which firmware it runs. If you're using a community firmware, it's fine to keep it, and nothing needs changing: it just can't show here."));
+                    body(ui, "Only if you want to see the screen here, or if this FM-1 has M-VAVE's original firmware:");
                     step1(ui);
                 }
             }
