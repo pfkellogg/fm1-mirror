@@ -14,6 +14,7 @@ mod glyphs;
 mod install;
 mod keys;
 mod screen;
+mod smooth;
 mod staff;
 
 use std::path::PathBuf;
@@ -33,6 +34,22 @@ const BAR_FOR: Duration = Duration::from_secs(4);
 const HELLO_EVERY: Duration = Duration::from_millis(900);
 /// Nothing from the FM-1 this long after connecting: it isn't sending its screen.
 const QUIET: Duration = Duration::from_secs(4);
+/// The floating spyglass: room around the eyepiece in its window, and its smallest and largest size.
+const FLOAT_PAD: f32 = 14.0;
+const FLOAT_SIZES: (f32, f32) = (140.0, 900.0);
+
+/// The spyglass in a window of its own. It keeps its own state and repaints on its own: macOS stops
+/// redrawing FM-1 Mirror's window behind others, and the spyglass has to keep going then.
+struct Float {
+    glass: glass::Glass,
+    size: f32,
+    /// Where its window is on the desktop.
+    at: Option<Pos2>,
+    /// Its window was closed.
+    close: bool,
+    /// Moved or resized since the settings were saved.
+    dirty: bool,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Look {
@@ -222,6 +239,15 @@ struct App {
     /// Where the spyglass is: its centre as a fraction of the screen area, and its diameter in points.
     glass_at: Option<(f32, f32)>,
     glass_size: Option<f32>,
+    /// The FM-1's screen shows (off: only the spyglass, or nothing).
+    mirror_on: bool,
+    /// The FM-1's screen with the jaggies taken off (off: exactly as it sends it).
+    smooth_on: bool,
+    /// The spyglass floats in a window of its own, outside this one.
+    glass_float: bool,
+    float: Arc<Mutex<Float>>,
+    /// The size and place its window opens with.
+    float_open: (f32, Option<Pos2>),
 }
 
 /// Why there's no picture yet.
@@ -272,6 +298,8 @@ impl App {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or(Value::Null);
+        let float_size = saved["spyglass_float_size"].as_f64().map_or(320.0, |d| d as f32).clamp(FLOAT_SIZES.0, FLOAT_SIZES.1);
+        let float_at = saved["spyglass_float_x"].as_f64().zip(saved["spyglass_float_y"].as_f64()).map(|(x, y)| Pos2::new(x as f32, y as f32));
         App {
             shared: Arc::default(),
             link: None,
@@ -293,13 +321,26 @@ impl App {
             glass_on: saved["spyglass"].as_bool().unwrap_or(true),
             glass_at: saved["spyglass_x"].as_f64().zip(saved["spyglass_y"].as_f64()).map(|(x, y)| (x as f32, y as f32)),
             glass_size: saved["spyglass_size"].as_f64().map(|d| d as f32),
+            mirror_on: saved["mirror"].as_bool().unwrap_or(true),
+            smooth_on: saved["smooth"].as_bool().unwrap_or(true),
+            glass_float: saved["spyglass_float"].as_bool().unwrap_or(false),
+            float: Arc::new(Mutex::new(Float { glass: glass::Glass::default(), size: float_size, at: float_at, close: false, dirty: false })),
+            float_open: (float_size, float_at),
         }
     }
 
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float });
+        {
+            let f = self.float.lock().unwrap();
+            s["spyglass_float_size"] = json!(f.size);
+            if let Some(at) = f.at {
+                s["spyglass_float_x"] = json!(at.x);
+                s["spyglass_float_y"] = json!(at.y);
+            }
+        }
         if let Some((x, y)) = self.glass_at {
             s["spyglass_x"] = json!(x);
             s["spyglass_y"] = json!(y);
@@ -385,12 +426,25 @@ impl App {
             s.changed = false;
             s.screen.pixels.clone()
         };
-        let img = ColorImage { size: [SIZE, SIZE], pixels: pixels.into_iter().map(|c| self.look.paint(c)).collect() };
-        // Nearest: the FM-1's 5x7 letters stay crisp blocks however big they get.
+        let painted: Vec<Color32> = pixels.into_iter().map(|c| self.look.paint(c)).collect();
+        // Nearest: the FM-1's 5x7 letters stay crisp blocks however big they get. Smooth: a bigger copy, blended.
+        let (img, options) = if self.smooth_on {
+            let side = SIZE * smooth::SCALE;
+            (ColorImage { size: [side, side], pixels: smooth::smooth(&painted, SIZE) }, TextureOptions::LINEAR)
+        } else {
+            (ColorImage { size: [SIZE, SIZE], pixels: painted }, TextureOptions::NEAREST)
+        };
         match &mut self.texture {
-            Some(t) => t.set(img, TextureOptions::NEAREST),
-            None => self.texture = Some(ctx.load_texture("fm1", img, TextureOptions::NEAREST)),
+            Some(t) => t.set(img, options),
+            None => self.texture = Some(ctx.load_texture("fm1", img, options)),
         }
+    }
+
+    fn toggle_smooth(&mut self) {
+        self.smooth_on = !self.smooth_on;
+        self.mirror_on = true; // it's the mirror that's smooth: show it
+        self.shared.lock().unwrap().changed = true; // repaint it the other way
+        self.store();
     }
 
     /// Why there's no picture, if there isn't one.
@@ -567,8 +621,22 @@ impl App {
                 self.looked = None; // connect it now
                 self.store();
             }
+            if ui.button(if self.mirror_on { "Hide mirror" } else { "Show mirror" }).clicked() {
+                self.mirror_on = !self.mirror_on;
+                self.store();
+            }
+            if ui.selectable_label(self.smooth_on, if self.smooth_on { "Smooth: on" } else { "Smooth: off" }).clicked() {
+                self.toggle_smooth();
+            }
             if ui.selectable_label(self.glass_on, "Spyglass").clicked() {
                 self.glass_on = !self.glass_on;
+                self.store();
+            }
+            if self.glass_on && ui.selectable_label(self.glass_float, "Float").clicked() {
+                self.glass_float = !self.glass_float;
+                let f = self.float.lock().unwrap();
+                self.float_open = (f.size, f.at);
+                drop(f);
                 self.store();
             }
             let before = self.look;
@@ -702,7 +770,7 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
 
 impl App {
     /// The spyglass over the screen area: the first time in the room beside the FM-1's (square,
-    /// centred) screen if there's enough, else top right over it. Drag to move, scroll to resize.
+    /// centred) screen if there's enough, else top right over it. Drag to move; drag the grip or scroll to resize.
     fn spyglass(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, area: Rect) {
         if self.glass.tick(&self.played.lock().unwrap()) || self.glass.busy() {
             ctx.request_repaint_after(Duration::from_millis(50));
@@ -729,12 +797,94 @@ impl App {
                 moved = true;
             }
         }
-        if r.drag_stopped() || (moved && !r.dragged()) {
+        // The grip on the rim: the centre stays, so the rim follows the pointer at twice the size.
+        let grip_at = glass::grip_at(c, d);
+        let grip = ui.interact(Rect::from_center_size(grip_at, vec2(30.0, 30.0)), ui.id().with("spyglass grip"), egui::Sense::drag());
+        if grip.dragged() {
+            let m = grip.drag_delta();
+            self.glass_size = Some((d + (m.x + m.y) * std::f32::consts::SQRT_2).clamp(140.0, area.width().min(area.height())));
+        }
+        if grip.hovered() || grip.dragged() {
+            ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        }
+        if r.drag_stopped() || grip.drag_stopped() || (moved && !r.dragged()) {
             self.store();
         }
         let sound = self.shared.lock().unwrap().sound.clone();
         self.glass.draw(ui.painter(), c, d, sound.as_deref());
+        if ui.rect_contains_pointer(Rect::from_center_size(c, vec2(d, d))) || grip.dragged() {
+            glass::draw_grip(ui.painter(), grip_at, grip.hovered() || grip.dragged());
+        }
     }
+
+    /// The spyglass's own window, outside this one: no frame, see-through around the eyepiece, on top of other windows.
+    /// Deferred: it runs by itself, also while this window is hidden behind others.
+    fn float_window(&mut self, ctx: &egui::Context) {
+        let (size, at) = self.float_open;
+        let side = size + 2.0 * FLOAT_PAD;
+        // Fixed while it's open: moving and resizing go straight to the window.
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title("Spyglass")
+            .with_inner_size([side, side])
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_resizable(false)
+            .with_always_on_top();
+        if let Some(at) = at {
+            builder = builder.with_position(at);
+        }
+        let (float, played, shared) = (self.float.clone(), self.played.clone(), self.shared.clone());
+        ctx.show_viewport_deferred(egui::ViewportId::from_hash_of("spyglass"), builder, move |ctx, _| float_ui(ctx, &float, &played, &shared));
+    }
+}
+
+/// One frame of the floating spyglass: drag it to move the window, the grip or a scroll to resize it.
+fn float_ui(ctx: &egui::Context, float: &Mutex<Float>, played: &Mutex<keys::Played>, shared: &Mutex<Shared>) {
+    ctx.request_repaint_after(Duration::from_millis(50));
+    let mut guard = float.lock().unwrap();
+    let f = &mut *guard;
+    f.glass.tick(&played.lock().unwrap());
+    let (close, at, scroll) = ctx.input(|i| (i.viewport().close_requested(), i.viewport().outer_rect.map(|r| r.min), i.smooth_scroll_delta.y));
+    if close {
+        f.close = true;
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
+    }
+    if at.is_some() && at != f.at {
+        f.at = at;
+        f.dirty = true;
+    }
+    let sound = shared.lock().unwrap().sound.clone();
+    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+        let area = ui.max_rect();
+        let (c, d) = (area.center(), f.size);
+        let body = ui.interact(area, ui.id().with("float"), egui::Sense::click_and_drag());
+        if body.drag_started() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+        let grip_at = glass::grip_at(c, d);
+        let grip = ui.interact(Rect::from_center_size(grip_at, vec2(30.0, 30.0)), ui.id().with("float grip"), egui::Sense::drag());
+        let mut size = d;
+        if grip.dragged() {
+            let m = grip.drag_delta(); // the window's top left stays, so the grip moves about 0.85 of the size's change
+            size += (m.x + m.y) * 0.59;
+        }
+        if body.hovered() {
+            size += scroll * 0.6;
+        }
+        let size = size.clamp(FLOAT_SIZES.0, FLOAT_SIZES.1);
+        if size != d {
+            f.size = size;
+            f.dirty = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::Vec2::splat(size + 2.0 * FLOAT_PAD)));
+        }
+        if grip.hovered() || grip.dragged() {
+            ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        }
+        f.glass.draw(ui.painter(), c, d, sound.as_deref());
+        if ui.rect_contains_pointer(area) || grip.dragged() {
+            glass::draw_grip(ui.painter(), grip_at, grip.hovered() || grip.dragged());
+        }
+    });
 }
 
 /// The biggest square that fits in `area`, in its middle.
@@ -744,14 +894,42 @@ fn fit(area: Rect) -> Rect {
 }
 
 impl eframe::App for App {
+    /// See-through, for the floating spyglass: this window's panels cover all of it.
+    fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
+        [0.0; 4]
+    }
+
+    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        self.store();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.keep_linked(ctx);
         self.take_screen(ctx);
-        let (moved, full_key, escape) = ctx.input(|i| {
+        let (closed, dirty) = {
+            let mut f = self.float.lock().unwrap();
+            let got = (std::mem::take(&mut f.close), std::mem::take(&mut f.dirty));
+            if got.0 || got.1 {
+                self.float_open = (f.size, f.at);
+            }
+            got
+        };
+        if closed {
+            self.glass_float = false;
+        }
+        if closed || dirty {
+            self.store();
+        }
+        if self.glass_on && self.glass_float && self.install.is_none() {
+            self.float_window(ctx);
+        }
+        let (moved, full_key, escape, mirror_key, smooth_key) = ctx.input(|i| {
             (
                 i.pointer.delta().length() > 0.0 || i.pointer.any_pressed(),
                 i.key_pressed(egui::Key::F),
                 i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::M),
+                i.key_pressed(egui::Key::S),
             )
         });
         if moved {
@@ -760,6 +938,13 @@ impl eframe::App for App {
         if full_key || (escape && self.full_screen) {
             self.full_screen = !self.full_screen && !escape;
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.full_screen));
+        }
+        if mirror_key {
+            self.mirror_on = !self.mirror_on;
+            self.store();
+        }
+        if smooth_key {
+            self.toggle_smooth();
         }
         let need = self.need();
         if self.install.as_ref().is_some_and(|p| p.lock().unwrap().done) && need.is_none() {
@@ -779,9 +964,22 @@ impl eframe::App for App {
                 let need = need.unwrap_or(Need::Connecting);
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(area.shrink2(vec2(40.0, 10.0))), |ui| self.need_panel(ui, need));
             } else if let Some(tex) = &self.texture {
-                p.image(tex.id(), fit(area), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
-                if self.glass_on {
+                let in_here = self.glass_on && !self.glass_float;
+                if self.mirror_on {
+                    p.image(tex.id(), fit(area), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                } else if !in_here {
+                    p.text(area.center() - vec2(0.0, 50.0), Align2::CENTER_CENTER, "The mirror is hidden", FontId::proportional(24.0), Color32::GRAY);
+                }
+                if in_here {
                     self.spyglass(ui, ctx, area);
+                }
+                // Always a way back that doesn't need the bar, which hides itself.
+                if !self.mirror_on {
+                    let at = if in_here { area.center_bottom() - vec2(0.0, 44.0) } else { area.center() + vec2(0.0, 10.0) };
+                    if ui.put(Rect::from_center_size(at, vec2(220.0, 56.0)), egui::Button::new("Show mirror")).clicked() {
+                        self.mirror_on = true;
+                        self.store();
+                    }
                 }
             } else {
                 p.text(area.center(), Align2::CENTER_CENTER, "…", FontId::proportional(40.0), Color32::WHITE);
@@ -795,7 +993,8 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP_NAME)
             .with_inner_size([900.0, 960.0])
-            .with_min_inner_size([300.0, 340.0]),
+            .with_min_inner_size([300.0, 340.0])
+            .with_transparent(true), // (lets the floating spyglass's window be see-through)
         ..Default::default()
     };
     eframe::run_native(APP_NAME, options, Box::new(|cc| Ok(Box::new(App::new(cc)))))

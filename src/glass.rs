@@ -1,7 +1,7 @@
 //! The spyglass: the last note or chord played, in a round brass eyepiece beside the FM-1's screen
-//! (Synth Spyglass's, drawn inside this window). The note name big, the notes on a grand staff,
-//! the full name and pitch, and how hard the key was hit. Drag it to move it; scroll over it to
-//! resize it; Spyglass in the bar puts it away.
+//! (Synth Spyglass's), inside this window or floating in one of its own. The note name big, the notes
+//! on a grand staff, the full name and pitch, and how hard the key was hit. Drag it to move it; drag
+//! the grip on its rim, or scroll over it, to resize it; Spyglass in the bar puts it away.
 
 use std::time::Instant;
 
@@ -21,6 +21,20 @@ const TEXT: Color32 = Color32::WHITE;
 const SOUND: Color32 = Color32::from_rgb(0xf7, 0xdc, 0x92);
 const SOUND_GLASS: Color32 = Color32::from_rgba_premultiplied(14, 11, 5, 225);
 const SOUND_SHINE: Color32 = Color32::from_rgba_premultiplied(10, 9, 6, 18);
+
+/// The resize grip's place on the rim, lower right, for a spyglass centred on `c`, `d` across.
+pub fn grip_at(c: Pos2, d: f32) -> Pos2 {
+    c + vec2(1.0, 1.0) * (d / 2.0 * std::f32::consts::FRAC_1_SQRT_2)
+}
+
+/// The resize grip: a brass stud with two diagonal grooves.
+pub fn draw_grip(p: &Painter, at: Pos2, hot: bool) {
+    p.circle(at, 12.0, if hot { BRASS_LIGHT } else { BRASS }, Stroke::new(1.5_f32, BRASS_SHADOW));
+    for k in [-3.0, 3.0] {
+        let o = vec2(k, k);
+        p.line_segment([at + o + vec2(-4.0, 4.0), at + o + vec2(4.0, -4.0)], Stroke::new(1.5_f32, BRASS_SHADOW));
+    }
+}
 
 enum Shown {
     Note(u8, Option<u8>),
@@ -127,19 +141,25 @@ impl Glass {
             }
             Some(Shown::Chord { keys, name, held }) => (name.clone(), held.clone(), keys.clone(), None),
         };
-        let size = if matches!(self.shown, Some(Shown::Chord { .. })) { d * 0.19 } else { d * 0.24 };
+        // With notes the staff is what's read: the name small above it, the staff as big as the glass allows.
+        let playing = !keys.is_empty();
+        let size = match (&self.shown, playing) {
+            (_, false) => d * 0.24,
+            (Some(Shown::Chord { .. }), _) => d * 0.10,
+            _ => d * 0.115,
+        };
         let g = fit(name, size, d * 0.72);
-        p.galley(c + vec2(0.0, -d * 0.165) - g.size() / 2.0, g, TEXT);
-        if !keys.is_empty() {
-            let w = d * 0.34;
-            staff::draw(p, Rect::from_center_size(c + vec2(0.0, d * 0.11), vec2(w, w * 1.06)), &keys, GLASS, TEXT);
+        p.galley(c + vec2(0.0, if playing { -d * 0.215 } else { -d * 0.165 }) - g.size() / 2.0, g, TEXT);
+        if playing {
+            let w = d * 0.45;
+            staff::draw(p, Rect::from_center_size(c + vec2(0.0, d * 0.087), vec2(w, w * 1.06)), &keys, GLASS, TEXT);
         }
-        let g = fit(detail, (d * 0.065).max(13.0), d * 0.54);
-        p.galley(c + vec2(0.0, d * 0.325) - g.size() / 2.0, g, TEXT);
+        let g = fit(detail, (d * 0.055).max(12.0), d * 0.54);
+        p.galley(c + vec2(0.0, if playing { d * 0.365 } else { d * 0.325 }) - g.size() / 2.0, g, TEXT);
         // How hard the key was hit: a short brass bar under it, full at 127.
         if let Some(v) = vel {
             let (w, h) = (d * 0.26, (d * 0.012).max(3.0));
-            let track = Rect::from_center_size(c + vec2(0.0, d * 0.37), vec2(w, h));
+            let track = Rect::from_center_size(c + vec2(0.0, d * 0.405), vec2(w, h));
             p.rect_filled(track, CornerRadius::same(2), BRASS_SHADOW);
             p.rect_filled(Rect::from_min_size(track.min, vec2(w * v as f32 / 127.0, h)), CornerRadius::same(2), BRASS_LIGHT);
         }

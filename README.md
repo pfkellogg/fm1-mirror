@@ -121,6 +121,8 @@ If M-Upgrade says "invalid device information", unplug other MIDI gear such as a
 ## Using FM-1 Mirror
 
 - **F**: full screen (Esc to leave). Drag the window to another monitor or a TV first if you like.
+- **M**, or **Hide mirror** in the bar: hides the FM-1's screen, to keep only the spyglass. **Show mirror** brings it back.
+- **S**, or **Smooth: off / on** in the bar: takes the jaggies off the FM-1's text and lines (on to begin with). It's a smoothed copy, so turning it off shows exactly what the FM-1 sends.
 - **Looks**: Color, Bright color (lifts dark colours like purple so they can be read), Yellow on black, White on black, Black on white.
 - The buttons hide after a few seconds so the screen is as big as it can be; move the mouse to bring
   them back.
@@ -137,8 +139,8 @@ If M-Upgrade says "invalid device information", unplug other MIDI gear such as a
 - **Spyglass**: a round brass eyepiece over the screen with the note or chord you play, on a staff,
   and how hard you hit the key. On top of it, the **sound playing** (`T1 FM6 ICE BELL`), when the firmware
   says it: [JIANT FM + Big Screen](https://github.com/pfkellogg/JIANT/blob/big-screen/BIG_SCREEN.md) does,
-  others don't yet (then there's nothing on top). Drag it to move it; scroll over it to resize it; **Spyglass** in the
-  bar puts it away. The FM-1's own keys show too, once **KEY OUT** is on: on the FM-1, press **SEQ**,
+  others don't yet (then there's nothing on top). Drag it to move it; drag the brass grip on its rim, or scroll over it, to resize it; **Spyglass** in the
+  bar puts it away. **Float** lifts it out of the window into one of its own, see-through and on top of other windows, and it keeps going when FM-1 Mirror is minimized. The FM-1's own keys show too, once **KEY OUT** is on: on the FM-1, press **SEQ**,
   turn **ALGO** to page **6/8 MIDI TRACK**, and turn **K4 (KEY OUT)** to **ON** (K3, OUT PORT, on
   USB+BLE).
 - **No sound?** A keyboard's volume slider (a Keystation has one) sets the FM-1's volume: keep it up.
