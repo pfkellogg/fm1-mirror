@@ -201,7 +201,7 @@ impl Glass {
     }
 }
 
-/// A spyglass's eyepiece: see-through dark glass, darker toward the edge, a glint of light,
+/// A spyglass's eyepiece: see-through dark glass, darker toward the edge, a dot of light,
 /// and a knurled brass rim lit from the top left (Synth Spyglass's lens()).
 fn lens(p: &Painter, c: Pos2, r: f32, d: f32) {
     use std::f32::consts::TAU;
@@ -216,7 +216,6 @@ fn lens(p: &Painter, c: Pos2, r: f32, d: f32) {
     let arc = |radius: f32, from: f32, to: f32| -> Vec<Pos2> {
         (0..=24).map(|k| from + (to - from) * k as f32 / 24.0).map(|a| c + vec2(a.cos(), a.sin()) * radius).collect()
     };
-    p.add(egui::Shape::line(arc(glass_r * 0.94, TAU * 0.57, TAU * 0.66), Stroke::new(d * 0.012, Color32::from_rgba_unmultiplied(255, 255, 255, 22))));
     p.circle_filled(c + vec2(-0.52, -0.72) * glass_r, d * 0.008, Color32::from_rgba_unmultiplied(255, 255, 255, 45));
     let bands = [BRASS_SHADOW, BRASS_DARK, BRASS, BRASS_LIGHT, BRASS, BRASS_DARK];
     let w = rim / bands.len() as f32;
