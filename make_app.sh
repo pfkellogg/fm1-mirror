@@ -11,7 +11,8 @@ VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 NAME="FM-1 Mirror"
 APP="dist/$NAME.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # (tools/make_icon.py draws it)
 lipo -create -output "$APP/Contents/MacOS/fm1-mirror" \
     target/aarch64-apple-darwin/release/fm1-mirror target/x86_64-apple-darwin/release/fm1-mirror
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -24,6 +25,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.pfkellogg.fm1-mirror</string>
   <key>CFBundleExecutable</key><string>fm1-mirror</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleVersion</key><string>$VER</string>
   <key>CFBundleShortVersionString</key><string>$VER</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
