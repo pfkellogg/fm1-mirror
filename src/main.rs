@@ -17,6 +17,7 @@ mod scope;
 mod screen;
 mod smooth;
 mod staff;
+mod usbname;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -382,6 +383,11 @@ impl App {
                 }
             }
             if self.link.is_none() {
+                // macOS may still call it by an old firmware's name ("ChoralRoot FM-1" for LOOM-8): the FM-1's own
+                // USB name again, for every app (usbname.rs)
+                for (old, new) in usbname::fix_stale_names(is_fm1) {
+                    eprintln!("renamed the USB MIDI device \"{old}\" to \"{new}\", the name the FM-1 reports");
+                }
                 {
                     let mut s = self.shared.lock().unwrap();
                     s.identity = None;

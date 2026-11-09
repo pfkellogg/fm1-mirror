@@ -1259,6 +1259,8 @@ dependencies = [
 name = "fm1-mirror"
 version = "1.3.4"
 dependencies = [
+ "core-foundation-sys",
+ "coremidi-sys",
  "cpal",
  "dirs",
  "earcutr",
