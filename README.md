@@ -142,12 +142,13 @@ If M-Upgrade says "invalid device information", unplug other MIDI gear such as a
   Spyglass) also plays the FM-1 from the same keyboard, set Keys to **None**, or you'll hear notes twice.
 - **Spyglass**: a round brass eyepiece over the screen with the note or chord you play, on a staff,
   and how hard you hit the key. On top of it, the **sound playing** (`T1 FM6 ICE BELL`), when the firmware
-  says it: [JIANT FM + Big Screen](https://github.com/pfkellogg/JIANT/blob/big-screen/BIG_SCREEN.md) does,
-  others don't yet (then there's nothing on top). Drag it to move it; drag the brass grip on its rim, or scroll over it, to resize it; **Spyglass** in the
+  says it: [JIANT FM + Big Screen](https://github.com/pfkellogg/JIANT/blob/big-screen/BIG_SCREEN.md) and
+  [Melodee + Big Screen](https://github.com/pfkellogg/melodee/blob/big-screen/BIG_SCREEN.md) do, others don't yet (then there's nothing on top). Drag it to move it; drag the brass grip on its rim, or scroll over it, to resize it; **Spyglass** in the
   bar puts it away. **Float** lifts it out of the window into one of its own, see-through and on top of other windows, and it keeps going when FM-1 Mirror is minimized. The FM-1's own keys show too, once **KEY OUT** is on: on the FM-1, press **SEQ**,
   turn **ALGO** to page **6/8 MIDI TRACK**, and turn **K4 (KEY OUT)** to **ON** (K3, OUT PORT, on
   USB+BLE).
   From 1.3.2 a note or chord clears 3 seconds after the last key comes up, leaving empty staves over "play a note".
+  From 1.3.6 the glass is clean (no dot of light at its top left), and the Mac app has its own icon.
   From 1.3.3 it also shows the **waveform** of the FM-1's real sound beside the staff, over USB (not Bluetooth). A Mac asks once to use the microphone, because it counts any audio input as one: FM-1 Mirror listens only to the FM-1.
 - **No sound?** A keyboard's volume slider (a Keystation has one) sets the FM-1's volume: keep it up.
 - **An old firmware's name on a Mac?** macOS remembers a USB MIDI device by its USB IDs and port, and keeps its first name: after a new firmware, every app may still show the old one ("ChoralRoot FM-1" for LOOM-8). From 1.3.5, FM-1 Mirror gives it back the name the FM-1 reports, for every app on the Mac (M-Flasher too).
@@ -188,6 +189,8 @@ All three come from Leo Kuroshita's Felucca, and so do 23 of the 25 most popular
 The fourth: **[SLOOP + FM-1 Big Screen](https://github.com/pfkellogg/sloop-fm1/blob/big-screen/BIG_SCREEN.md)**, isod89's live groovebox and the most starred FM-1 firmware, SLOOP 2.8.5 with about 40 lines added, and the sound playing on the spyglass too. Tested on a real FM-1 (2026-11-07) on a Mac. Download it from its [Releases](https://github.com/pfkellogg/sloop-fm1/releases). Watch it: [SLOOP on a Big Screen](https://youtu.be/Pd4Bm6JvtkU).
 
 The fifth: **[Melodee + FM-1 Big Screen](https://github.com/pfkellogg/melodee/blob/big-screen/BIG_SCREEN.md)**, keremimo's multi-engine synth and sequencer, Melodee 1.6.1 with the mirror added, and the sound playing on the spyglass too. USB only. Tested on a real FM-1 (2026-11-07) on a Mac and an Android tablet. Download it from its [Releases](https://github.com/pfkellogg/melodee/releases). Plain Melodee doesn't send its screen: it's fine to keep using it, and you only need this build to see it here. Watch it: [FM-1 Mirror's Big Update: Smooth, a Floating Spyglass, and Melodee on a Big Screen](https://youtu.be/Cve21r8oZJs).
+
+**LOOM-8** ([Charles Vestal's groovebox](https://github.com/charlesvestal/fm1-loom)) mirrors its own screen: from LOOM-8 0.13, its [Mirror page](https://charlesvestal.github.io/fm1-loom/mirror/) (Chrome or Edge, over USB) shows it and lets you play the panel from there. It speaks its own messages, not FM-1 Mirror's, and there's no Big Screen build of it here: Charles prefers one LOOM-8, so use its page.
 
 With Keys on SLOOP, a keyboard plays track 1 only: FM-1 Mirror sends it on channel 1, while the FM-1's own keys play the selected track. Tested 2026-11-04: on track 1 both play the same sound. To have the keyboard follow the selected track, SLOOP's manual gives GLO > MIDI 2 > IN = CH 1 (not tested yet).
 
