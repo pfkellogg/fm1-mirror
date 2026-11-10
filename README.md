@@ -32,7 +32,7 @@ Click the file for your computer. These links always give the newest version:
 | Mac (Apple silicon and Intel) | [**FM-1-Mirror-mac.zip**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-mac.zip) | Double-click the zip to unzip it, drag **FM-1 Mirror** (the app, with the FM-1 Mirror name) to Applications and open it. It isn't from the App Store, so the first time macOS may refuse: open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to FM-1 Mirror. |
 | Windows 10 and 11 | [**FM-1-Mirror-windows.exe**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-windows.exe) | Double-click. If Windows says "protected your PC", click **More info → Run anyway**. |
 | Linux | [**FM-1-Mirror-linux**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-linux) | `chmod +x FM-1-Mirror-linux` and run it. |
-| Android 11 or newer (tablet or phone) | [**FM-1 Mirror + Spyglass**](https://github.com/pfkellogg/fm1-mirror-spyglass-android) | Its own page, with the download and how to plug it in. |
+| Android 11 or newer (tablet or phone) | [**FM-1 Mirror + Spyglass**](https://github.com/pfkellogg/fm1-mirror-spyglass-android) (from 1.5.0 also Android 7.1 and a Fire TV Stick 4K, with a built-in piano) | Its own page, with the download and how to plug it in. |
 
 > **Not the green "Code" button.** GitHub's green **Code → Download ZIP** button at the top of this
 > page gives the app's source code (a folder called `fm1-mirror-master`), which doesn't run. Use the
@@ -142,7 +142,11 @@ If M-Upgrade says "invalid device information", unplug other MIDI gear such as a
   ([ChoralRoot's MIDI Keys](https://github.com/pfkellogg/ChoralRootFM1/blob/big-screen/BIG_SCREEN.md#playing-it-from-a-usb-keyboard),
   for its chord engine); or **as they come**. SysEx is never passed on. If another app (MIDI Bridge, Synth
   Spyglass) also plays the FM-1 from the same keyboard, set Keys to **None**, or you'll hear notes twice.
-- **Spyglass**: a round brass eyepiece over the screen with the note or chord you play, on a staff,
+  **The show goes on** (since the 2026-11-10 source): the keyboard opens with or without an FM-1, so the spyglass
+  shows what you play even before the FM-1 is plugged in, and plays the FM-1 the moment it arrives (FM-1 Mirror
+  looks every second). With the spyglass on, no "Waiting" panel covers it: a line says the FM-1's screen shows
+  when it's plugged in. With the spyglass off, the panel says **No FM-1 yet**.
+- **Spyglass**: a round brass eyepiece over the screen with the note or chord you play (the pitch to one decimal, "C4 261.6 Hz"), on a staff,
   and how hard you hit the key. On top of it, the **sound playing** (`T1 FM6 ICE BELL`), when the firmware
   says it: [JIANT FM + Big Screen](https://github.com/pfkellogg/JIANT/blob/big-screen/BIG_SCREEN.md) and
   [Melodee + Big Screen](https://github.com/pfkellogg/melodee/blob/big-screen/BIG_SCREEN.md) do, others don't yet (then there's nothing on top). Drag it to move it; drag the brass grip on its rim, or scroll over it, to resize it; **Spyglass** in the
