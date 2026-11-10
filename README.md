@@ -21,6 +21,8 @@ phones).
 Questions, or something not working? Write to me:
 **pfkellogg@gmail.com**
 
+**No FM-1?** [MIDI Spyglass](https://github.com/pfkellogg/midi-spyglass) is the spyglass on its own, for any MIDI keyboard: the notes and chords, the staff, the waveform, and FROM → TO pairs that play your synths (Mac, Windows, Linux and Android; [video](https://youtu.be/GMLf3W4oTp4)).
+
 ## Download
 
 Click the file for your computer. These links always give the newest version:
