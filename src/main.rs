@@ -235,6 +235,9 @@ struct App {
     keys: Option<keys::Keys>,
     /// "" any keyboard plugged in, "-" none, or a port's name; and everything to channel 1.
     keys_choice: String,
+    /// Where the keyboard's notes go: the FM-1's link while there is one. The keyboard stays open without it, for the
+    /// spyglass: the show goes on.
+    keys_out: Arc<Mutex<Option<Arc<Mutex<MidiOutputConnection>>>>>,
     /// The channel Keys sends on: 1 to 16, or 0 for as they come.
     keys_channel: u8,
     keys_changed: bool,
@@ -320,6 +323,7 @@ impl App {
             listener: None,
             keys: None,
             keys_choice: saved["keys"].as_str().unwrap_or("").to_string(),
+            keys_out: Arc::new(Mutex::new(None)),
             // (an older "all to channel 1" switch carries over)
             keys_channel: saved["keys_channel"].as_u64().map(|c| c.min(16) as u8).unwrap_or(if saved["keys_to_one"].as_bool().unwrap_or(true) { 1 } else { 0 }),
             keys_changed: false,
@@ -371,7 +375,7 @@ impl App {
                 return;
             }
         }
-        if self.looked.is_none_or(|t| now - t >= Duration::from_secs(2)) {
+        if self.looked.is_none_or(|t| now - t >= Duration::from_secs(1)) {
             self.looked = Some(now);
             if let Some(link) = &self.link {
                 let still_there = self.scanner.as_ref().is_some_and(|o| o.ports().iter().any(|p| o.port_name(p).is_ok_and(|n| n == link.name)));
@@ -397,6 +401,7 @@ impl App {
                 }
                 self.link = open(self.shared.clone(), self.played.clone(), ctx.clone());
             }
+            *self.keys_out.lock().unwrap() = self.link.as_ref().map(|l| l.out.clone());
             self.keep_keys(ctx);
             if self.glass_on && self.listener.as_ref().is_none_or(|l| l.dead()) {
                 self.listener = scope::open(self.sound_in.clone());
@@ -407,17 +412,16 @@ impl App {
         ctx.request_repaint_after(HELLO_EVERY);
     }
 
-    /// The keyboard: only while the FM-1 is here to play; let go if it's unplugged or another is chosen.
+    /// The keyboard, FM-1 or not (the spyglass shows it either way; it plays the FM-1 while there is one); let go if
+    /// it's unplugged or another is chosen.
     fn keep_keys(&mut self, ctx: &egui::Context) {
-        let Some(link) = &self.link else {
-            self.keys = None;
-            return;
-        };
         let sources = keys::sources();
         if let Some(k) = &self.keys {
             if self.keys_changed || !sources.contains(&k.name) {
                 self.keys = None;
-                keys::silence(&link.out);
+                if let Some(link) = &self.link {
+                    keys::silence(&link.out);
+                }
             }
         }
         self.keys_changed = false;
@@ -428,7 +432,7 @@ impl App {
                 name => sources.iter().find(|n| *n == name).cloned(),
             };
             if let Some(name) = want {
-                self.keys = keys::Keys::open(&name, link.out.clone(), self.played.clone(), self.keys_channel, ctx.clone());
+                self.keys = keys::Keys::open(&name, self.keys_out.clone(), self.played.clone(), self.keys_channel, ctx.clone());
             }
         }
     }
@@ -535,7 +539,7 @@ impl App {
             }
             match need {
                 Need::Plug => {
-                    heading(ui, "Waiting for the FM-1…");
+                    heading(ui, "No FM-1 yet");
                     body(ui, "Plug it into this computer with its USB cable and turn it on.");
                     #[cfg(target_os = "macos")]
                     {
@@ -976,7 +980,10 @@ impl eframe::App for App {
         if self.install.as_ref().is_some_and(|p| p.lock().unwrap().done) && need.is_none() {
             self.install = None; // the screen is back
         }
-        let showing_help = need.is_some() || self.install.is_some();
+        // No FM-1 with the spyglass in this window: no panel over it, the spyglass goes on with the keyboard.
+        let no_fm1 = self.link.is_none() && self.install.is_none();
+        let spyglass_alone = no_fm1 && self.glass_on && !self.glass_float;
+        let showing_help = (need.is_some() || self.install.is_some()) && !spyglass_alone;
         if showing_help || self.last_move.elapsed() < BAR_FOR {
             egui::TopBottomPanel::bottom("buttons")
                 .frame(egui::Frame::new().fill(Color32::from_gray(28)).inner_margin(egui::Margin::same(14)))
@@ -989,6 +996,10 @@ impl eframe::App for App {
             if showing_help {
                 let need = need.unwrap_or(Need::Connecting);
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(area.shrink2(vec2(40.0, 10.0))), |ui| self.need_panel(ui, need));
+            } else if spyglass_alone {
+                p.text(area.center_bottom() - vec2(0.0, 24.0), Align2::CENTER_CENTER, "No FM-1 yet: its screen shows here when it's plugged in",
+                    FontId::proportional(18.0), Color32::GRAY);
+                self.spyglass(ui, ctx, area);
             } else if let Some(tex) = &self.texture {
                 let in_here = self.glass_on && !self.glass_float;
                 if self.mirror_on {

@@ -153,7 +153,8 @@ pub struct Keys {
 }
 
 impl Keys {
-    pub fn open(name: &str, out: Arc<Mutex<MidiOutputConnection>>, played: Arc<Mutex<Played>>, channel: u8, ctx: eframe::egui::Context) -> Option<Keys> {
+    /// `out`: where the notes go, the FM-1's link while there is one (None: the spyglass still shows them).
+    pub fn open(name: &str, out: Arc<Mutex<Option<Arc<Mutex<MidiOutputConnection>>>>>, played: Arc<Mutex<Played>>, channel: u8, ctx: eframe::egui::Context) -> Option<Keys> {
         let mut input = MidiInput::new(APP_NAME).ok()?;
         input.ignore(Ignore::None); // clock goes through too
         let port = input.ports().into_iter().find(|p| input.port_name(p).is_ok_and(|n| n == name))?;
@@ -167,7 +168,9 @@ impl Keys {
                     if pass.is_empty() {
                         return;
                     }
-                    let _ = out.lock().unwrap().send(&pass);
+                    if let Some(o) = out.lock().unwrap().clone() {
+                        let _ = o.lock().unwrap().send(&pass);
+                    }
                     parser.feed(&pass, &mut played.lock().unwrap());
                     ctx.request_repaint(); // the spyglass
                 },
