@@ -18,6 +18,8 @@ mod screen;
 mod smooth;
 mod staff;
 mod usbname;
+#[cfg(target_os = "macos")]
+mod reopen;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -1043,5 +1045,9 @@ fn main() -> eframe::Result {
             .with_transparent(true), // (lets the floating spyglass's window be see-through)
         ..Default::default()
     };
-    eframe::run_native(APP_NAME, options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
+    eframe::run_native(APP_NAME, options, Box::new(|cc| {
+        #[cfg(target_os = "macos")]
+        reopen::install(); // a Dock click brings back the minimized window
+        Ok(Box::new(App::new(cc)))
+    }))
 }
