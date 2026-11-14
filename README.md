@@ -1,7 +1,5 @@
 # FM-1 Mirror: the M-VAVE FM-1's screen, big
 
-☕ If this helps you make music, you can [buy me a coffee on Ko-fi](https://ko-fi.com/aikellogg).
-
 The M-VAVE FM-1 is a wonderful little FM synth, but its screen is only 1.54 inches across. If your
 eyes aren't what they were, it's hard to read. **FM-1 Mirror shows the FM-1's screen on your
 computer, tablet or phone, as big as you like**: the whole window or the whole monitor, sharp, in colour, or in
@@ -130,7 +128,7 @@ If M-Upgrade says "invalid device information", unplug other MIDI gear such as a
 
 - **F**: full screen (Esc to leave). Drag the window to another monitor or a TV first if you like.
 - **M**, or **Hide mirror** in the bar: hides the FM-1's screen, to keep only the spyglass. **Show mirror** brings it back.
-- **S**, or **Smooth: off / on** in the bar: takes the jaggies off the FM-1's text and lines (on to begin with). It's a smoothed copy, so turning it off shows exactly what the FM-1 sends. From 1.3.9 it's smooth *and* sharp: a Lanczos enlargement and a light sharpening, so letters stay crisp, also on firmwares that shade their screens with dots (Erik37).
+- **S**, or **Smooth: off / on** in the bar: takes the jaggies off the FM-1's text and lines (on to begin with). It's a smoothed copy, so turning it off shows exactly what the FM-1 sends.
 - **Looks**: Color, Bright color (lifts dark colours like purple so they can be read), Yellow on black, White on black, Black on white.
 - The buttons hide after a few seconds so the screen is as big as it can be; move the mouse to bring
   them back.
@@ -157,8 +155,6 @@ If M-Upgrade says "invalid device information", unplug other MIDI gear such as a
   USB+BLE).
   From 1.3.2 a note or chord clears 3 seconds after the last key comes up, leaving empty staves over "play a note".
   From 1.3.6 the glass is clean (no dot of light at its top left), and the Mac app has its own icon.
-  From 1.3.7 the Mac app keeps its own icon in the Dock while it runs (before, it turned into an "e").
-  From 1.3.8, with the spyglass floating, a click on the Dock icon brings back the minimized FM-1 Mirror window (before, only the spyglass came back).
   From 1.3.3 it also shows the **waveform** of the FM-1's real sound beside the staff, over USB (not Bluetooth). A Mac asks once to use the microphone, because it counts any audio input as one: FM-1 Mirror listens only to the FM-1.
 - **No sound?** A keyboard's volume slider (a Keystation has one) sets the FM-1's volume: keep it up.
 - **An old firmware's name on a Mac?** macOS remembers a USB MIDI device by its USB IDs and port, and keeps its first name: after a new firmware, every app may still show the old one ("ChoralRoot FM-1" for LOOM-8). From 1.3.5, FM-1 Mirror gives it back the name the FM-1 reports, for every app on the Mac (M-Flasher too).
@@ -254,3 +250,5 @@ M-VAVE doesn't support it.
 GPL-3.0 (see LICENSE), like M-VAVE's FM1 Open application code it builds on.
 
 Contact: **pfkellogg@gmail.com**
+
+Related: try FM-1 firmwares in the browser with the free community [FM-1 Emulator](https://fm1-emulator.atst.tools/).
