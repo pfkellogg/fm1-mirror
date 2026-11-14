@@ -250,3 +250,5 @@ M-VAVE doesn't support it.
 GPL-3.0 (see LICENSE), like M-VAVE's FM1 Open application code it builds on.
 
 Contact: **pfkellogg@gmail.com**
+
+Related: try FM-1 firmwares in the browser with the free community [FM-1 Emulator](https://fm1-emulator.atst.tools/).
