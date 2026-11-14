@@ -130,7 +130,7 @@ If M-Upgrade says "invalid device information", unplug other MIDI gear such as a
 
 - **F**: full screen (Esc to leave). Drag the window to another monitor or a TV first if you like.
 - **M**, or **Hide mirror** in the bar: hides the FM-1's screen, to keep only the spyglass. **Show mirror** brings it back.
-- **S**, or **Smooth: off / on** in the bar: takes the jaggies off the FM-1's text and lines (on to begin with). It's a smoothed copy, so turning it off shows exactly what the FM-1 sends.
+- **S**, or **Smooth: off / on** in the bar: takes the jaggies off the FM-1's text and lines (on to begin with). It's a smoothed copy, so turning it off shows exactly what the FM-1 sends. From 1.3.9 it's smooth *and* sharp: a Lanczos enlargement and a light sharpening, so letters stay crisp, also on firmwares that shade their screens with dots (Erik37).
 - **Looks**: Color, Bright color (lifts dark colours like purple so they can be read), Yellow on black, White on black, Black on white.
 - The buttons hide after a few seconds so the screen is as big as it can be; move the mouse to bring
   them back.
