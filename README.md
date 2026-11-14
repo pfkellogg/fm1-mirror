@@ -157,6 +157,7 @@ If M-Upgrade says "invalid device information", unplug other MIDI gear such as a
   USB+BLE).
   From 1.3.2 a note or chord clears 3 seconds after the last key comes up, leaving empty staves over "play a note".
   From 1.3.6 the glass is clean (no dot of light at its top left), and the Mac app has its own icon.
+  From 1.3.7 the Mac app keeps its own icon in the Dock while it runs (before, it turned into an "e").
   From 1.3.3 it also shows the **waveform** of the FM-1's real sound beside the staff, over USB (not Bluetooth). A Mac asks once to use the microphone, because it counts any audio input as one: FM-1 Mirror listens only to the FM-1.
 - **No sound?** A keyboard's volume slider (a Keystation has one) sets the FM-1's volume: keep it up.
 - **An old firmware's name on a Mac?** macOS remembers a USB MIDI device by its USB IDs and port, and keeps its first name: after a new firmware, every app may still show the old one ("ChoralRoot FM-1" for LOOM-8). From 1.3.5, FM-1 Mirror gives it back the name the FM-1 reports, for every app on the Mac (M-Flasher too).

@@ -848,6 +848,7 @@ impl App {
         // Fixed while it's open: moving and resizing go straight to the window.
         let mut builder = egui::ViewportBuilder::default()
             .with_title("Spyglass")
+            .with_icon(app_icon())
             .with_inner_size([side, side])
             .with_decorations(false)
             .with_transparent(true)
@@ -1025,10 +1026,18 @@ impl eframe::App for App {
     }
 }
 
+/// The app's own icon (FM-1 screen + spyglass). Without it eframe swaps the Dock icon for egui's "e" at launch.
+fn app_icon() -> std::sync::Arc<egui::IconData> {
+    std::sync::Arc::new(
+        eframe::icon_data::from_png_bytes(include_bytes!("../icon/icon-1024.png")).unwrap_or_default(),
+    )
+}
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP_NAME)
+            .with_icon(app_icon())
             .with_inner_size([900.0, 960.0])
             .with_min_inner_size([300.0, 340.0])
             .with_transparent(true), // (lets the floating spyglass's window be see-through)
