@@ -1,6 +1,6 @@
 //! Smooth: the FM-1's 240 x 240 picture, `SCALE` times bigger, smooth and crisp. A Lanczos-3 enlargement draws the
 //! curves and diagonals of letters smoothly (and evens out the dot patterns some firmwares, like Erik37, dither their
-//! screens with), then a light unsharp mask (a Gaussian blur of radius 2 taken away at 0.8) gives the edges back their
+//! screens with), then a firm unsharp mask (a Gaussian blur of radius 1 taken away at 2.6, from 1.3.10; 1.3.9 had radius 2 at 0.8, which looked soft) gives the edges back their
 //! bite. The same as the iOS app's Core Image filters (CILanczosScaleTransform, CIUnsharpMask). From 1.3.9; before,
 //! Scale2x twice and a 1-2-1 blur, which turned dithered letters into small stairs. The original picture is never
 //! changed: this makes a copy.
@@ -10,8 +10,8 @@ use eframe::egui::Color32;
 /// How many times bigger the smooth picture is.
 pub const SCALE: usize = 4;
 /// The unsharp mask: the blur's radius (its sigma, in output pixels) and how much of the difference is added back.
-const SHARPEN_RADIUS: f32 = 2.0;
-const SHARPEN_AMOUNT: f32 = 0.8;
+const SHARPEN_RADIUS: f32 = 1.0;
+const SHARPEN_AMOUNT: f32 = 2.6;
 
 fn lanczos3(x: f32) -> f32 {
     let x = x.abs();
