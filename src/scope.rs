@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 /// Its USB name has one of these in it.
-const HINTS: [&str; 9] = ["fm-1", "fm1", "jieli", "usb-audio", "usb composite", "felucca", "melodee", "choralroot", "jiant"];
+const HINTS: [&str; 13] = ["fm-1", "fm1", "jieli", "usb-audio", "usb composite", "felucca", "melodee", "choralroot", "jiant",
+    "erik37", "sloop", "skiff", "loom"];   // (community firmwares name their USB audio after themselves: Erik37 "ERIK37")
 /// Samples kept: plenty for the window plus a period to find the trigger in.
 const KEEP: usize = 8192;
 /// How much of the sound is shown, in seconds: the same for every note.
@@ -151,5 +152,6 @@ mod tests {
     #[test]
     fn finds_the_fm1_by_its_name() {
         assert!(is_fm1("Melodee FM-1") && is_fm1("USB-Audio") && !is_fm1("AIR 192 6") && !is_fm1("HD Webcam eMeet C960"));
+        assert!(is_fm1("ERIK37") && is_fm1("LOOM-8 FM-1") && !is_fm1("Mac mini Microphone"));
     }
 }
