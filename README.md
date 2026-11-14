@@ -1,5 +1,7 @@
 # FM-1 Mirror: the M-VAVE FM-1's screen, big
 
+☕ If this helps you make music, you can [buy me a coffee on Ko-fi](https://ko-fi.com/aikellogg).
+
 The M-VAVE FM-1 is a wonderful little FM synth, but its screen is only 1.54 inches across. If your
 eyes aren't what they were, it's hard to read. **FM-1 Mirror shows the FM-1's screen on your
 computer, tablet or phone, as big as you like**: the whole window or the whole monitor, sharp, in colour, or in
