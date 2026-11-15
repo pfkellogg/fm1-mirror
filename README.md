@@ -34,7 +34,7 @@ Click the file for your computer. These links always give the newest version:
 | Mac (Apple silicon and Intel) | [**FM-1-Mirror-mac.zip**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-mac.zip) | Double-click the zip to unzip it, drag **FM-1 Mirror** (the app, with the FM-1 Mirror name) to Applications and open it. It isn't from the App Store, so the first time macOS may refuse: open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to FM-1 Mirror. |
 | Windows 10 and 11 | [**FM-1-Mirror-windows.exe**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-windows.exe) | Double-click. If Windows says "protected your PC", click **More info → Run anyway**. |
 | Linux | [**FM-1-Mirror-linux**](https://github.com/pfkellogg/fm1-mirror/releases/latest/download/FM-1-Mirror-linux) | `chmod +x FM-1-Mirror-linux` and run it. |
-| Android 11 or newer (tablet or phone) | [**FM-1 Mirror + Spyglass**](https://github.com/pfkellogg/fm1-mirror-spyglass-android) (from 1.5.0 also Android 7.1 and a Fire TV Stick 4K, with a built-in piano) | Its own page, with the download and how to plug it in. |
+| Android 11 or newer (tablet or phone) | [**FM-1 Mirror + Spyglass**](https://github.com/pfkellogg/fm1-mirror-spyglass-android) (from 1.5.0 also Android 7.1 and a Fire TV Stick 4K, with a built-in piano; from 1.5.4 it also finds an FM-1 running Erik37) | Its own page, with the download and how to plug it in. |
 
 > **Not the green "Code" button.** GitHub's green **Code → Download ZIP** button at the top of this
 > page gives the app's source code (a folder called `fm1-mirror-master`), which doesn't run. Use the
