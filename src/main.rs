@@ -1047,7 +1047,15 @@ fn main() -> eframe::Result {
     };
     eframe::run_native(APP_NAME, options, Box::new(|cc| {
         #[cfg(target_os = "macos")]
-        reopen::install(); // a Dock click brings back the minimized window
+        {
+            reopen::install(); // a Dock click brings back the minimized window
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(h) = cc.window_handle() {
+                if let RawWindowHandle::AppKit(a) = h.as_raw() {
+                    reopen::solid_main_window(a.ns_view.as_ptr()); // a clear, solid title bar
+                }
+            }
+        }
         Ok(Box::new(App::new(cc)))
     }))
 }

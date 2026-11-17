@@ -73,3 +73,25 @@ pub fn install() {
         );
     }
 }
+
+/// The main window is made see-through at startup (so the floating spyglass's window can be: they share one GL
+/// setup), and on macOS that also made its title bar see-through: "FM-1 Mirror" was drawn straight over whatever
+/// was behind the window and looked smudged. Make just the main window solid again, with the system's normal
+/// window colour behind its title bar. `view` is its NSView.
+pub fn solid_main_window(view: *mut c_void) {
+    unsafe {
+        if view.is_null() {
+            return;
+        }
+        let send_id: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(objc_msgSend as *const c_void);
+        let send_bool_arg: extern "C" fn(Id, Sel, Bool) = std::mem::transmute(objc_msgSend as *const c_void);
+        let send_with: extern "C" fn(Id, Sel, Id) = std::mem::transmute(objc_msgSend as *const c_void);
+        let window = send_id(view, sel(b"window\0"));
+        if window.is_null() {
+            return;
+        }
+        let colour = send_id(objc_getClass(b"NSColor\0".as_ptr() as *const c_char), sel(b"windowBackgroundColor\0"));
+        send_with(window, sel(b"setBackgroundColor:\0"), colour);
+        send_bool_arg(window, sel(b"setOpaque:\0"), YES);
+    }
+}
