@@ -334,7 +334,7 @@ impl App {
             glass_at: saved["spyglass_x"].as_f64().zip(saved["spyglass_y"].as_f64()).map(|(x, y)| (x as f32, y as f32)),
             glass_size: saved["spyglass_size"].as_f64().map(|d| d as f32),
             mirror_on: saved["mirror"].as_bool().unwrap_or(true),
-            smooth_on: saved["smooth"].as_bool().unwrap_or(true),
+            smooth_on: true, // always on at start (S or the button turns it off for this session)
             glass_float: saved["spyglass_float"].as_bool().unwrap_or(false),
             float: Arc::new(Mutex::new(Float { glass: glass::Glass::default(), size: float_size, at: float_at, close: false, dirty: false })),
             float_open: (float_size, float_at),
