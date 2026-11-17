@@ -159,6 +159,7 @@ If M-Upgrade says "invalid device information", unplug other MIDI gear such as a
   From 1.3.6 the glass is clean (no dot of light at its top left), and the Mac app has its own icon.
   From 1.3.7 the Mac app keeps its own icon in the Dock while it runs (before, it turned into an "e").
   From 1.3.8, with the spyglass floating, a click on the Dock icon brings back the minimized FM-1 Mirror window (before, only the spyglass came back).
+  From 1.3.13, with a community firmware's regular release (SLOOP, JIANT FM, Melodee, ChoralRoot, Skiff, Erik37, NACHTFAHRT, LOOM-8), FM-1 Mirror names it and says what to do: install its Big Screen version (a button opens its download page), since the regular release doesn't send its screen.
   From 1.3.12 the Mac window's title bar is solid, so its "FM-1 Mirror" title is clear (before, it was drawn over whatever was behind the window), and Smooth is on every time FM-1 Mirror starts.
   From 1.3.3 it also shows the **waveform** of the FM-1's real sound beside the staff, over USB (not Bluetooth). A Mac asks once to use the microphone, because it counts any audio input as one: FM-1 Mirror listens only to the FM-1. It finds the FM-1's sound by its name, also, from 1.3.11, when a community firmware names it after itself (Erik37's is "ERIK37"; SLOOP, Skiff and LOOM-8 too).
 - **No sound?** A keyboard's volume slider (a Keystation has one) sets the FM-1's volume: keep it up.

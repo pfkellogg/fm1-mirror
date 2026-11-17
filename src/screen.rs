@@ -38,6 +38,50 @@ pub fn firmware_name(info: &str, identity: Option<&str>) -> String {
     }
 }
 
+/// A community firmware that has a Big Screen version (or one on the way), and where to get it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Community {
+    pub name: &'static str,
+    /// The Big Screen build: which version of the firmware it is.
+    pub build: &'static str,
+    pub url: &'static str,
+    /// A ready-made download (else the page explains: offered to its author, or its own mirror).
+    pub released: bool,
+}
+
+/// Which community firmware this is, from its own name (the answer to `ASK_INFO`), its USB name, or its identity, when
+/// it isn't sending its screen: its regular release has no Big Screen part. None: not one we know.
+pub fn community(info: Option<&str>, identity: Option<&str>, port: &str) -> Option<Community> {
+    let t = format!("{} {}", info.unwrap_or(""), port).to_lowercase();
+    let id = identity.unwrap_or("");
+    let c = |name, build, url, released| Some(Community { name, build, url, released });
+    if t.contains("sloop") {
+        return c("SLOOP", "SLOOP 2.8.5 + Big Screen", "https://github.com/pfkellogg/sloop-fm1/releases", true);
+    }
+    if t.contains("jiant") {
+        return c("JIANT FM", "JIANT FM V10.49 + Big Screen", "https://github.com/pfkellogg/JIANT/releases", true);
+    }
+    if t.contains("melodee") || id.starts_with("FM-1_910") {
+        return c("Melodee", "Melodee 1.6.1 + Big Screen", "https://github.com/pfkellogg/melodee/releases", true);
+    }
+    if t.contains("choralroot") {
+        return c("ChoralRoot", "ChoralRoot 0.29 + Big Screen", "https://github.com/pfkellogg/ChoralRootFM1/releases", true);
+    }
+    if t.contains("skiff") || (t.contains("felucca v") && id.starts_with("FM-1_7")) {
+        return c("Skiff", "Skiff 2.1.1 + Big Screen", "https://github.com/pfkellogg/skiff/releases", true);
+    }
+    if t.contains("erik37") || id.starts_with("FM-1_480") {
+        return c("Erik37", "Erik37 1.3 + Big Screen", "https://github.com/pfkellogg/erik37/blob/big-screen/BIG_SCREEN.md", false);
+    }
+    if t.contains("nachtfahrt") || id.starts_with("FM-1_197") {
+        return c("NACHTFAHRT", "NACHTFAHRT 1.0 + Big Screen", "https://github.com/pfkellogg/fm1-nachtfahrt/blob/big-screen/BIG_SCREEN.md", false);
+    }
+    if t.contains("loom") {
+        return c("LOOM-8", "LOOM-8's own Mirror page", "https://charlesvestal.github.io/fm1-loom/mirror/", false);
+    }
+    None
+}
+
 /// The sound playing, if this is the FM-1 saying it (an empty name: none).
 pub fn sound(m: &[u8]) -> Option<String> {
     if m.len() < 6 || m[..5] != SOUND || m[m.len() - 1] != 0xf7 {
@@ -116,6 +160,16 @@ mod tests {
         assert_eq!(firmware_name("JIANT v0.9.18", Some("FM-1_900")), "JIANT v0.9.18");
         assert_eq!(firmware_name("FELUCCA v2.1.1", Some("FM-1_700")), "Skiff v2.1.1");
         assert_eq!(firmware_name("FELUCCA v1.5", Some("FM-1_915")), "Felucca v1.5");
+        let n = |info: Option<&str>, id: Option<&str>, port: &str| community(info, id, port).map(|c| c.name);
+        assert_eq!(n(Some("FELUCCA SLOOP 2.8.6"), Some("FM-1_928"), "Felucca"), Some("SLOOP"));
+        assert_eq!(n(None, None, "JIANT"), Some("JIANT FM"));
+        assert_eq!(n(Some("JIANT v0.9.18"), Some("FM-1_900"), "FM-1"), Some("JIANT FM"));
+        assert_eq!(n(None, Some("FM-1_91061"), "Melodee FM-1"), Some("Melodee"));
+        assert_eq!(n(Some("FELUCCA v2.1.1"), Some("FM-1_700"), "Felucca"), Some("Skiff"));
+        assert_eq!(n(None, Some("FM-1_480103"), "ERIK37"), Some("Erik37"));
+        assert_eq!(n(None, Some("FM-1_197000000"), "DUB-1 FM-1"), Some("NACHTFAHRT"));
+        assert_eq!(n(Some("FELUCCA v1.5"), Some("FM-1_915"), "Felucca"), None);
+        assert_eq!(n(None, Some("FM-1_8000014"), "FM1 Community"), None);
         assert_eq!(firmware_name("FELUCCA v1.5", None), "Felucca v1.5");
     }
 

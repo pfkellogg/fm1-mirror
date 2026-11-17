@@ -269,6 +269,8 @@ enum Need {
     Open,
     /// In its updater, waiting: an update stopped partway (this app can finish it).
     Updater,
+    /// A community firmware whose regular release doesn't send its screen: its Big Screen version does.
+    Community(screen::Community),
     Other(String),
     Unknown(String),
     /// Over Bluetooth with a Big Screen build that only sends its screen over USB.
@@ -471,9 +473,9 @@ impl App {
 
     /// Why there's no picture, if there isn't one.
     fn need(&self) -> Option<Need> {
-        let (last, identity) = {
+        let (last, identity, firmware) = {
             let s = self.shared.lock().unwrap();
-            (s.last, s.identity.clone())
+            (s.last, s.identity.clone(), s.firmware.clone())
         };
         let Some(link) = &self.link else { return Some(Need::Plug) };
         // The FM-1 only sends what changes, so a still screen is quiet: once it has come, keep it.
@@ -483,8 +485,10 @@ impl App {
         if link.opened.elapsed() < QUIET {
             return Some(Need::Connecting);
         }
+        let known = screen::community(firmware.as_deref(), identity.as_deref(), &link.name);
         Some(match identity {
             Some(id) if is_bluetooth(&link.name) && !install::is_updater(&id) => Need::Bluetooth, // installs need USB
+            _ if known.is_some() => Need::Community(known.unwrap()),
             Some(id) if id.starts_with("FM-1_0") => Need::Original,
             Some(id) if install::is_open_firmware(&id) => Need::Open,
             Some(id) if install::is_updater(&id) => Need::Updater,
@@ -581,6 +585,27 @@ impl App {
                     if ui.button("Finish installing Big Screen").clicked() {
                         self.start_install();
                     }
+                }
+                Need::Community(c) => {
+                    heading(ui, &format!("This FM-1 runs {}", c.name));
+                    body(ui, &format!("It's fine to keep using it. But the regular {} doesn't send its screen, so it can't show here: FM-1 Mirror needs the Big Screen version of the firmware on the FM-1.", c.name));
+                    if c.released {
+                        body(ui, &format!("Install {}: the same {}, plus sending its screen to this app. Its page has the download and how to install it. Then plug the FM-1 in again and open this app.", c.build, c.name));
+                        if ui.button(format!("Open the {} + Big Screen page", c.name)).clicked() {
+                            open_url(c.url);
+                        }
+                    } else if c.name == "LOOM-8" {
+                        body(ui, "LOOM-8 shows its own screen big on its Mirror page (Chrome or Edge, over USB).");
+                        if ui.button("Open LOOM-8's Mirror page").clicked() {
+                            open_url(c.url);
+                        }
+                    } else {
+                        body(ui, &format!("A Big Screen version of {} is made and offered to its author, but there's no download yet. Its page says where it stands.", c.name));
+                        if ui.button(format!("About {} + Big Screen", c.name)).clicked() {
+                            open_url(c.url);
+                        }
+                    }
+                    body(ui, "The spyglass (notes, chords, the staff) works with any firmware, Big Screen or not: turn it on with Spyglass, and play through Keys.");
                 }
                 Need::Other(id) => {
                     heading(ui, "This FM-1 runs another firmware");
