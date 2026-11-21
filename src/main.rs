@@ -1,12 +1,12 @@
 #![cfg_attr(windows, windows_subsystem = "windows")] // no console window on Windows
-//! FM-1 Mirror: the M-VAVE FM-1's screen, big, on the Mac.
+//! FM-1 Big Screen: the M-VAVE FM-1's screen, big, on the Mac.
 //!
 //! With the FM-1 Big Screen firmware, the FM-1 sends its screen over its USB MIDI connection
 //! while this app keeps asking for it (see screen.rs). It's drawn as large as the window allows,
 //! pixel-sharp, in colour or in high-contrast looks for reading. The buttons hide after a few
 //! seconds so the screen is as big as it can be: move the mouse to bring them back.
 //! Keys plays the FM-1 from a keyboard through the app, and the spyglass beside the screen shows
-//! what's played (keys.rs, glass.rs), as in FM-1 Mirror + Spyglass on Android.
+//! what's played (keys.rs, glass.rs), as in FM-1 Big Screen + Spyglass on Android.
 
 mod chord;
 mod glass;
@@ -31,7 +31,9 @@ use serde_json::{json, Value};
 
 use screen::{Screen, ASK_INFO, HELLO, HELLO_ALL, SIZE};
 
-const APP_NAME: &str = "FM-1 Mirror";
+const APP_NAME: &str = "FM-1 Big Screen";
+/// Settings stay in the folder named for the app's old name, FM-1 Mirror, so nothing is lost.
+const SETTINGS_DIR: &str = "FM-1 Mirror";
 /// How long the buttons stay after the mouse last moved.
 const BAR_FOR: Duration = Duration::from_secs(4);
 /// How often to say hello (the FM-1 stops sending three seconds after the last one).
@@ -43,7 +45,7 @@ const FLOAT_PAD: f32 = 14.0;
 const FLOAT_SIZES: (f32, f32) = (140.0, 900.0);
 
 /// The spyglass in a window of its own. It keeps its own state and repaints on its own: macOS stops
-/// redrawing FM-1 Mirror's window behind others, and the spyglass has to keep going then.
+/// redrawing FM-1 Big Screen's window behind others, and the spyglass has to keep going then.
 struct Float {
     glass: glass::Glass,
     size: f32,
@@ -213,7 +215,7 @@ fn is_bluetooth(name: &str) -> bool {
 }
 
 fn settings_path() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join(APP_NAME).join("settings.json"))
+    Some(dirs::config_dir()?.join(SETTINGS_DIR).join("settings.json"))
 }
 
 struct App {
@@ -588,7 +590,7 @@ impl App {
                 }
                 Need::Community(c) => {
                     heading(ui, &format!("This FM-1 runs {}", c.name));
-                    body(ui, &format!("It's fine to keep using it. But the regular {} doesn't send its screen, so it can't show here: FM-1 Mirror needs the Big Screen version of the firmware on the FM-1.", c.name));
+                    body(ui, &format!("It's fine to keep using it. But the regular {} doesn't send its screen, so it can't show here: FM-1 Big Screen needs the Big Screen version of the firmware on the FM-1.", c.name));
                     if c.released {
                         body(ui, &format!("Install {}: the same {}, plus sending its screen to this app. Its page has the download and how to install it. Then plug the FM-1 in again and open this app.", c.build, c.name));
                         if ui.button(format!("Open the {} + Big Screen page", c.name)).clicked() {
@@ -763,12 +765,12 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
         .or_else(|| ports.iter().find(|p| input.port_name(p).is_ok_and(|n| is_fm1(&n))))?;
     let name = input.port_name(in_port).ok()?;
     let out_port = output.ports().into_iter().find(|p| output.port_name(p).is_ok_and(|n| n == name))?;
-    let output = Arc::new(Mutex::new(output.connect(&out_port, "FM-1 Mirror out").ok()?));
+    let output = Arc::new(Mutex::new(output.connect(&out_port, "FM-1 Big Screen out").ok()?));
     let mut parser = keys::Parser::default();
     let input = input
         .connect(
             in_port,
-            "FM-1 Mirror in",
+            "FM-1 Big Screen in",
             move |_, buffer, _| {
                 // Notes from the FM-1's own keys (KEY OUT on), for the spyglass.
                 let before = played.lock().unwrap().note_ons;

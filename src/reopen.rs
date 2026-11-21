@@ -1,4 +1,4 @@
-//! macOS: clicking FM-1 Mirror's Dock icon brings back its minimized window.
+//! macOS: clicking FM-1 Big Screen's Dock icon brings back its minimized window.
 //!
 //! With the floating spyglass showing, the app still has a visible window, so macOS doesn't
 //! bring back the minimized main window on a Dock click by itself: only the spyglass showed.
@@ -75,7 +75,7 @@ pub fn install() {
 }
 
 /// The main window is made see-through at startup (so the floating spyglass's window can be: they share one GL
-/// setup), and on macOS that also made its title bar see-through: "FM-1 Mirror" was drawn straight over whatever
+/// setup), and on macOS that also made its title bar see-through: "FM-1 Big Screen" was drawn straight over whatever
 /// was behind the window and looked smudged. Make just the main window solid again, with the system's normal
 /// window colour behind its title bar. `view` is its NSView.
 pub fn solid_main_window(view: *mut c_void) {

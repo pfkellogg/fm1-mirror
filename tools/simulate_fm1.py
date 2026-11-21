@@ -1,4 +1,4 @@
-# simulate_fm1.py: a pretend FM-1 with the Big Screen firmware, for testing FM-1 Mirror without one.
+# simulate_fm1.py: a pretend FM-1 with the Big Screen firmware, for testing FM-1 Big Screen without one.
 # A virtual MIDI device "FM1 Simulator" that, while hellos keep coming, sends a screen drawn with the
 # FM-1's own 5x7 font, row by row, in the firmware's format (see the firmware's screen.c).
 import sys, time, threading, mido

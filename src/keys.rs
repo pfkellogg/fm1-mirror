@@ -1,5 +1,5 @@
 //! Keys: a keyboard (or any MIDI device) playing the FM-1 through this app, and what's been
-//! played, for the spyglass. Like FM-1 Mirror + Spyglass on Android (Keys.java, Played.java).
+//! played, for the spyglass. Like FM-1 Big Screen + Spyglass on Android (Keys.java, Played.java).
 //!
 //! Everything from the keyboard goes on to the FM-1 as it came, clock included, except SysEx
 //! (that's how the FM-1 is updated). By default every channel message moves to channel 1, where
@@ -162,7 +162,7 @@ impl Keys {
         let connection = input
             .connect(
                 &port,
-                "FM-1 Mirror keys",
+                "FM-1 Big Screen keys",
                 move |_, bytes, _| {
                     let pass = filter.pass(bytes, channel);
                     if pass.is_empty() {

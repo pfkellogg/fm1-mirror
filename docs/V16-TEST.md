@@ -1,4 +1,4 @@
-# Testing FM-1 Mirror with M-VAVE's V16
+# Testing FM-1 Big Screen with M-VAVE's V16
 
 One real FM-1, tested 2026-11-03 and 2026-11-04. Your results may differ.
 
@@ -8,11 +8,11 @@ One real FM-1, tested 2026-11-03 and 2026-11-04. Your results may differ.
 
 ## Why
 
-A viewer on V16 lost the FM-1 partway through a Big Screen install, though it stayed plugged in. M-Upgrade got it running again. FM-1 Mirror waited for the FM-1's updater by the exact name `ota-FM-1_015`, and a unit from V16 may call it `ota-FM-1_016`. FM-1 Mirror 1.3.0 and FM-1 Mirror + Spyglass 1.4.0 accept `ota-FM-1_` plus any version.
+A viewer on V16 lost the FM-1 partway through a Big Screen install, though it stayed plugged in. M-Upgrade got it running again. FM-1 Big Screen waited for the FM-1's updater by the exact name `ota-FM-1_015`, and a unit from V16 may call it `ota-FM-1_016`. FM-1 Big Screen 1.3.0 and FM-1 Big Screen + Spyglass 1.4.0 accept `ota-FM-1_` plus any version.
 
 ## Setup
 
-- Mac on macOS 27.2 (26B123), FM-1 Mirror 1.3.0, M-Upgrade 3.11.0311
+- Mac on macOS 27.2 (26B123), FM-1 Big Screen 1.3.0, M-Upgrade 3.11.0311
 - FM-1 connected through a chain of USB hubs, not straight into the Mac
 - V16 file: `FM-1.fwsc`, dated 2026-10-21, 718,196 bytes, SHA-256 `d017fb65e70aca97ee29d944470c3515a74581df5c0576bf70de917c7b2b61d5`
 
@@ -22,10 +22,10 @@ A viewer on V16 lost the FM-1 partway through a Big Screen install, though it st
 |---|---|
 | Community firmware to V15 (Workbench, Force flash) | Worked. Identity `FM-1_015` |
 | V15 to V16 (M-Upgrade) | Worked in about 1 min 23 s. Identity `FM-1_016` |
-| FM-1 Mirror 1.3.0 on plain V16 | Shows "This FM-1 has M-VAVE's original firmware" and the two steps. No install offered, as designed |
+| FM-1 Big Screen 1.3.0 on plain V16 | Shows "This FM-1 has M-VAVE's original firmware" and the two steps. No install offered, as designed |
 | V16 back to V15 (Workbench) | Worked. Identity `FM-1_015` |
 | V16 to Official Open (Workbench, Force flash) | Worked. Identity `FM-1_8000014` |
-| Official Open to Big Screen (FM-1 Mirror 1.3.0) | Worked, no lost connection, live screen |
+| Official Open to Big Screen (FM-1 Big Screen 1.3.0) | Worked, no lost connection, live screen |
 
 **What this doesn't show:** we didn't capture the updater's name during the last step, so this shows the install works from V16, not that the `ota-FM-1_016` change is what made the difference. During the V15 to V16 update, M-Upgrade's log showed `ota-FM-1_015`.
 

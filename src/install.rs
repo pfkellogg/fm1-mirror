@@ -153,9 +153,9 @@ struct Link {
 
 impl Link {
     fn open(name: &str) -> Option<Link> {
-        let mut input = midir::MidiInput::new("FM-1 Mirror installer").ok()?;
+        let mut input = midir::MidiInput::new("FM-1 Big Screen installer").ok()?;
         input.ignore(midir::Ignore::None);
-        let output = midir::MidiOutput::new("FM-1 Mirror installer").ok()?;
+        let output = midir::MidiOutput::new("FM-1 Big Screen installer").ok()?;
         let ip = input.ports().into_iter().find(|p| input.port_name(p).is_ok_and(|n| n == name))?;
         let op = output.ports().into_iter().find(|p| output.port_name(p).is_ok_and(|n| n == name))?;
         let replies: Arc<Mutex<VecDeque<(u8, Vec<u8>)>>> = Arc::default();
@@ -223,7 +223,7 @@ fn capability(data: Option<Vec<u8>>) -> Result<(u8, u8, String), String> {
 
 /// Ports that may be the FM-1 (or its updater while it's working).
 fn candidates(updater: bool) -> Vec<String> {
-    let Ok(out) = midir::MidiOutput::new("FM-1 Mirror installer") else { return vec![] };
+    let Ok(out) = midir::MidiOutput::new("FM-1 Big Screen installer") else { return vec![] };
     out.ports()
         .iter()
         .filter_map(|p| out.port_name(p).ok())

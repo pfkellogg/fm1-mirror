@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds "FM-1 Mirror.app" (Apple silicon + Intel in one) and installs it in /Applications.
+# Builds "FM-1 Big Screen.app" (Apple silicon + Intel in one) and installs it in /Applications.
 set -e
 cd "$(dirname "$0")"
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -8,7 +8,7 @@ cargo build --release --target aarch64-apple-darwin
 cargo build --release --target x86_64-apple-darwin
 
 VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-NAME="FM-1 Mirror"
+NAME="FM-1 Big Screen"
 APP="dist/$NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -30,7 +30,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>$VER</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>The spyglass shows the waveform of the FM-1's own sound, which arrives over its USB cable as an audio input. FM-1 Mirror listens only to the FM-1.</string>
+  <key>NSMicrophoneUsageDescription</key><string>The spyglass shows the waveform of the FM-1's own sound, which arrives over its USB cable as an audio input. FM-1 Big Screen listens only to the FM-1.</string>
 </dict>
 </plist>
 PLIST

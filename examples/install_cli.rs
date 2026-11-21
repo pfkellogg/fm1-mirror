@@ -1,7 +1,7 @@
 // Runs the app's installer from a terminal and prints how it goes (for testing on a real FM-1).
 //   cargo run --example install_cli [--stop-at-updater]
 // --stop-at-updater quits once the FM-1 is waiting in its updater, as if the install had been
-// cut off there; running it again (or FM-1 Mirror) must then finish the update.
+// cut off there; running it again (or FM-1 Big Screen) must then finish the update.
 #[path = "../src/screen.rs"]
 #[allow(dead_code)]
 mod screen;

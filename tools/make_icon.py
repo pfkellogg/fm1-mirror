@@ -1,4 +1,4 @@
-"""Draws FM-1 Mirror's app icon (icon/AppIcon.icns, and icon/icon-1024.png): the FM-1's little screen made big,
+"""Draws FM-1 Big Screen's app icon (icon/AppIcon.icns, and icon/icon-1024.png): the FM-1's little screen made big,
 with the brass spyglass over its corner. Needs Pillow; macOS's iconutil makes the .icns.
     python3 tools/make_icon.py"""
 import subprocess
