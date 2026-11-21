@@ -57,6 +57,42 @@ struct Float {
     dirty: bool,
 }
 
+/// Which pixels belong to a filled area: within 4 pixels of a spot whose 9x9 neighbourhood is more than 60% drawn
+/// (anything brighter than the black background, dark dotted shading included). Text strokes on black never get that
+/// full; a picture, a panel or a dotted background does, and so do its edges.
+fn picture_mask(px: &[u16], side: usize) -> Vec<bool> {
+    const R: usize = 4;
+    let ink: Vec<u32> = px
+        .iter()
+        .map(|&c| {
+            let [r, g, b] = screen::rgb(c);
+            u32::from(0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32 > 0.03 * 255.0)
+        })
+        .collect();
+    // Counts in each pixel's (2R+1)^2 neighbourhood (clipped at the edges), by a summed-area table.
+    let window = |v: &[u32]| -> Vec<(u32, u32)> {
+        let w = side + 1;
+        let mut sat = vec![0u32; w * w];
+        for y in 0..side {
+            for x in 0..side {
+                sat[(y + 1) * w + x + 1] = v[y * side + x] + sat[y * w + x + 1] + sat[(y + 1) * w + x] - sat[y * w + x];
+            }
+        }
+        let mut out = Vec::with_capacity(side * side);
+        for y in 0..side {
+            let (y0, y1) = (y.saturating_sub(R), (y + R + 1).min(side));
+            for x in 0..side {
+                let (x0, x1) = (x.saturating_sub(R), (x + R + 1).min(side));
+                let n = sat[y1 * w + x1] + sat[y0 * w + x0] - sat[y0 * w + x1] - sat[y1 * w + x0];
+                out.push((n, ((y1 - y0) * (x1 - x0)) as u32));
+            }
+        }
+        out
+    };
+    let core: Vec<u32> = window(&ink).into_iter().map(|(n, area)| u32::from(n * 10 > area * 6)).collect();
+    window(&core).into_iter().map(|(n, _)| n > 0).collect()
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Look {
     Color,
@@ -87,6 +123,20 @@ impl Look {
             Look::White => "white",
             Look::Inverted => "inverted",
         }
+    }
+
+    /// The whole screen in this look. Bright color lifts only thin things on a dark background (text, lines): what
+    /// lies in or next to a filled area (a picture, a panel, a dotted background) keeps its own colours, so a
+    /// firmware's pictures (Erik37's piano) aren't washed out.
+    fn paint_all(self, px: &[u16], side: usize) -> Vec<Color32> {
+        if self != Look::Bright {
+            return px.iter().map(|&c| self.paint(c)).collect();
+        }
+        let near = picture_mask(px, side);
+        px.iter()
+            .zip(near)
+            .map(|(&c, pic)| if pic { Look::Color.paint(c) } else { self.paint(c) })
+            .collect()
     }
 
     fn paint(self, c: u16) -> Color32 {
@@ -452,7 +502,7 @@ impl App {
             s.changed = false;
             s.screen.pixels.clone()
         };
-        let painted: Vec<Color32> = pixels.into_iter().map(|c| self.look.paint(c)).collect();
+        let painted = self.look.paint_all(&pixels, SIZE);
         // Nearest: the FM-1's 5x7 letters stay crisp blocks however big they get. Smooth: a bigger copy, blended.
         let (img, options) = if self.smooth_on {
             let side = SIZE * smooth::SCALE;
@@ -1085,4 +1135,30 @@ fn main() -> eframe::Result {
         }
         Ok(Box::new(App::new(cc)))
     }))
+}
+
+#[cfg(test)]
+mod bright_tests {
+    use super::*;
+
+    #[test]
+    fn bright_lifts_thin_text_and_leaves_filled_areas() {
+        let side = 40;
+        let dim_purple: u16 = (6 << 11) | (2 << 5) | 10; // a dark purple
+        let mut px = vec![0u16; side * side];
+        for y in 5..15 {
+            px[y * side + 5] = dim_purple; // a one-pixel stroke on black
+        }
+        for y in 20..38 {
+            for x in 20..38 {
+                px[y * side + x] = dim_purple; // a filled block
+            }
+        }
+        let out = Look::Bright.paint_all(&px, side);
+        let colour = Look::Color.paint(dim_purple);
+        assert_ne!(out[10 * side + 5], colour, "the stroke is lifted");
+        assert_eq!(out[29 * side + 29], colour, "the block's inside keeps its colour");
+        assert_eq!(out[20 * side + 20], colour, "and so does its corner");
+        assert_eq!(out[0], Look::Color.paint(0), "black stays black");
+    }
 }
