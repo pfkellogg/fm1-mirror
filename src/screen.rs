@@ -28,9 +28,16 @@ pub fn firmware_info(m: &[u8]) -> Option<String> {
 
 /// The name to show. SLOOP and Skiff keep Felucca's USB name, and their answers start with "FELUCCA " for the web
 /// tools: "FELUCCA SLOOP 2.8.4" is SLOOP, and "FELUCCA v2.1.1" is Skiff when its identity is FM-1_7xx, else Felucca.
+/// Skiff Atlatl (LIkst4's fork of Skiff, FM-1_742xx) answers the same way: "FELUCCA v1.2" is Skiff Atlatl 1.2.
+/// Skiff Atlatl's identities (FM-1_742xx): it sends its screen itself (LIkst4 built the screen part in, V1.2).
+const ATLATL: &str = "FM-1_742";
+
 pub fn firmware_name(info: &str, identity: Option<&str>) -> String {
     let Some(rest) = info.strip_prefix("FELUCCA ") else { return info.to_string() };
     let bare_version = rest.strip_prefix('v').is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()));
+    if bare_version && identity.is_some_and(|id| id.starts_with(ATLATL)) {
+        return format!("Skiff Atlatl {rest}");
+    }
     match (bare_version, identity.is_some_and(|id| id.starts_with("FM-1_7"))) {
         (true, true) => format!("Skiff {rest}"),
         (true, false) => format!("Felucca {rest}"),
@@ -66,6 +73,9 @@ pub fn community(info: Option<&str>, identity: Option<&str>, port: &str) -> Opti
     }
     if t.contains("choralroot") {
         return c("ChoralRoot", "ChoralRoot 0.29 + Big Screen", "https://github.com/pfkellogg/ChoralRootFM1/releases", true);
+    }
+    if id.starts_with(ATLATL) {
+        return None; // (Skiff Atlatl sends its screen itself: nothing to offer)
     }
     if t.contains("skiff") || (t.contains("felucca v") && id.starts_with("FM-1_7")) {
         return c("Skiff", "Skiff 2.1.1 + Big Screen", "https://github.com/pfkellogg/skiff/releases", true);
@@ -160,6 +170,7 @@ mod tests {
         assert_eq!(firmware_name("JIANT v0.9.18", Some("FM-1_900")), "JIANT v0.9.18");
         assert_eq!(firmware_name("FELUCCA v2.1.1", Some("FM-1_700")), "Skiff v2.1.1");
         assert_eq!(firmware_name("FELUCCA v1.5", Some("FM-1_915")), "Felucca v1.5");
+        assert_eq!(firmware_name("FELUCCA v1.2", Some("FM-1_74212")), "Skiff Atlatl v1.2");
         let n = |info: Option<&str>, id: Option<&str>, port: &str| community(info, id, port).map(|c| c.name);
         assert_eq!(n(Some("FELUCCA SLOOP 2.8.6"), Some("FM-1_928"), "Felucca"), Some("SLOOP"));
         assert_eq!(n(None, None, "JIANT"), Some("JIANT FM"));
@@ -169,6 +180,7 @@ mod tests {
         assert_eq!(n(None, Some("FM-1_480103"), "ERIK37"), Some("Erik37"));
         assert_eq!(n(None, Some("FM-1_197000000"), "DUB-1 FM-1"), Some("NACHTFAHRT"));
         assert_eq!(n(Some("FELUCCA v1.5"), Some("FM-1_915"), "Felucca"), None);
+        assert_eq!(n(Some("FELUCCA v1.2"), Some("FM-1_74212"), "Felucca"), None);
         assert_eq!(n(None, Some("FM-1_8000014"), "FM1 Community"), None);
         assert_eq!(firmware_name("FELUCCA v1.5", None), "Felucca v1.5");
     }
