@@ -9,6 +9,7 @@
 //! what's played (keys.rs, glass.rs), as in FM-1 Big Screen + Spyglass on Android.
 
 mod chord;
+mod fm1base;
 mod glass;
 mod glyphs;
 mod install;
@@ -212,9 +213,18 @@ impl Drop for Link {
 /// it runs and which build, one question at a time (its updater drops a second one sent
 /// straight after). On a thread of its own: macOS stops redrawing a window that's hidden behind
 /// others, and the FM-1 stops sending three seconds after the last hello.
-fn hellos(output: Arc<Mutex<MidiOutputConnection>>, stop: Arc<std::sync::atomic::AtomicBool>, lost: Arc<std::sync::atomic::AtomicBool>) {
+/// Also asks the other way, Charles Vestal's mirror in fm1-base firmware (fm1base.rs): three times, between the other
+/// questions; once it answers (`base`, set by the input), it's kept on every two seconds (it stops after six).
+fn hellos(
+    output: Arc<Mutex<MidiOutputConnection>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    lost: Arc<std::sync::atomic::AtomicBool>,
+    base: Arc<std::sync::atomic::AtomicBool>,
+) {
     use std::sync::atomic::Ordering;
+    const BASE_ASK_AT: [u64; 3] = [1000, 5000, 6000]; // ms after opening: clear of the questions at 2, 3 and 4 s
     let opened = Instant::now();
+    let (mut base_asked, mut base_at) = (0usize, Instant::now());
     let (mut asked_identity, mut asked_build, mut asked_info, mut first) = (false, false, false, true);
     let mut hello_at: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
@@ -237,6 +247,16 @@ fn hellos(output: Arc<Mutex<MidiOutputConnection>>, stop: Arc<std::sync::atomic:
         if !asked_info && opened.elapsed() > Duration::from_secs(4) {
             asked_info = true;
             let _ = output.lock().unwrap().send(&ASK_INFO);
+        }
+        if base.load(Ordering::Relaxed) {
+            if base_at.elapsed() >= Duration::from_secs(2) {
+                base_at = Instant::now();
+                let _ = output.lock().unwrap().send(&fm1base::request(1));
+            }
+        } else if base_asked < BASE_ASK_AT.len() && opened.elapsed() > Duration::from_millis(BASE_ASK_AT[base_asked]) {
+            base_asked += 1;
+            base_at = Instant::now();
+            let _ = output.lock().unwrap().send(&fm1base::request(2)); // on, and the whole screen
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -817,6 +837,8 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
     let out_port = output.ports().into_iter().find(|p| output.port_name(p).is_ok_and(|n| n == name))?;
     let output = Arc::new(Mutex::new(output.connect(&out_port, "FM-1 Big Screen out").ok()?));
     let mut parser = keys::Parser::default();
+    let base: Arc<std::sync::atomic::AtomicBool> = Arc::default();
+    let base_in = base.clone();
     let input = input
         .connect(
             in_port,
@@ -857,6 +879,16 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                     s.changed = true;
                     ctx.request_repaint();
                 }
+                // Charles Vestal's mirror (fm1-base firmware): its answer, and its rectangles and fills.
+                match fm1base::apply(&mut s.screen, m) {
+                    fm1base::Got::Hello => base_in.store(true, std::sync::atomic::Ordering::Relaxed),
+                    fm1base::Got::Painted => {
+                        s.last = Some(Instant::now());
+                        s.changed = true;
+                        ctx.request_repaint();
+                    }
+                    fm1base::Got::Nothing => {}
+                }
                 }
             },
             (),
@@ -865,7 +897,7 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
     let stop: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let lost: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let (st, lo, out) = (stop.clone(), lost.clone(), output.clone());
-    std::thread::spawn(move || hellos(out, st, lo));
+    std::thread::spawn(move || hellos(out, st, lo, base));
     Some(Link { name, _input: input, out: output, opened: Instant::now(), stop, lost })
 }
 
