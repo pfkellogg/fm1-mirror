@@ -13,6 +13,7 @@ APP="dist/$NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # (tools/make_icon.py draws it)
+cp -R assets/mellotron "$APP/Contents/Resources/mellotron"   # the Mellotron's strips (src/mellotron.rs)
 lipo -create -output "$APP/Contents/MacOS/fm1-mirror" \
     target/aarch64-apple-darwin/release/fm1-mirror target/x86_64-apple-darwin/release/fm1-mirror
 cat > "$APP/Contents/Info.plist" <<PLIST

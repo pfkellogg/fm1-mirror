@@ -43,6 +43,17 @@ impl Ring {
         self.buf[(self.head + i) % KEEP]
     }
 
+    /// Sound made here (the Mellotron), at `rate`; `sounding` marks it as heard now (silence doesn't).
+    pub fn take(&mut self, samples: &[f32], rate: f32, sounding: bool) {
+        self.rate = rate;
+        for &x in samples {
+            self.push(x);
+        }
+        if sounding {
+            self.last = Some(Instant::now());
+        }
+    }
+
     /// Hearing it now.
     pub fn listening(&self) -> bool {
         self.last.is_some_and(|t| t.elapsed() < STALE)
@@ -85,7 +96,7 @@ impl Listener {
     }
 }
 
-fn is_fm1(name: &str) -> bool {
+pub fn is_fm1(name: &str) -> bool {
     let n = name.to_lowercase();
     HINTS.iter().any(|h| n.contains(h))
 }

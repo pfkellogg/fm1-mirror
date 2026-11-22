@@ -14,6 +14,7 @@ mod glass;
 mod glyphs;
 mod install;
 mod keys;
+mod mellotron;
 mod scope;
 mod screen;
 mod smooth;
@@ -324,6 +325,9 @@ struct App {
     mirror_on: bool,
     /// The FM-1's screen with the jaggies taken off (off: exactly as it sends it).
     smooth_on: bool,
+    /// The built-in Mellotron while it's on (flute, strings or choir): the FM-1's keys play it, out of this computer.
+    mellotron: Option<mellotron::Mellotron>,
+    mellotron_sound: &'static str,
     /// The spyglass floats in a window of its own, outside this one.
     glass_float: bool,
     float: Arc<Mutex<Float>>,
@@ -383,7 +387,7 @@ impl App {
             .unwrap_or(Value::Null);
         let float_size = saved["spyglass_float_size"].as_f64().map_or(320.0, |d| d as f32).clamp(FLOAT_SIZES.0, FLOAT_SIZES.1);
         let float_at = saved["spyglass_float_x"].as_f64().zip(saved["spyglass_float_y"].as_f64()).map(|(x, y)| Pos2::new(x as f32, y as f32));
-        App {
+        let mut app = App {
             shared: Arc::default(),
             link: None,
             scanner: MidiOutput::new(APP_NAME).ok(),
@@ -409,16 +413,20 @@ impl App {
             glass_size: saved["spyglass_size"].as_f64().map(|d| d as f32),
             mirror_on: saved["mirror"].as_bool().unwrap_or(true),
             smooth_on: true, // always on at start (S or the button turns it off for this session)
+            mellotron: None,
+            mellotron_sound: mellotron::SOUNDS.iter().copied().find(|s| saved["mellotron"] == *s).unwrap_or(""),
             glass_float: saved["spyglass_float"].as_bool().unwrap_or(false),
             float: Arc::new(Mutex::new(Float { glass: glass::Glass::default(), size: float_size, at: float_at, close: false, dirty: false })),
             float_open: (float_size, float_at),
-        }
+        };
+        app.start_mellotron();   // the sound it played last time
+        app
     }
 
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound });
         {
             let f = self.float.lock().unwrap();
             s["spyglass_float_size"] = json!(f.size);
@@ -533,6 +541,25 @@ impl App {
         match &mut self.texture {
             Some(t) => t.set(img, options),
             None => self.texture = Some(ctx.load_texture("fm1", img, options)),
+        }
+    }
+
+    /// The Mellotron button: off, flute, strings, choir, off again (remembered).
+    fn next_mellotron(&mut self) {
+        let i = mellotron::SOUNDS.iter().position(|s| *s == self.mellotron_sound);
+        self.mellotron_sound = match i {
+            None => mellotron::SOUNDS[0],
+            Some(i) if i + 1 < mellotron::SOUNDS.len() => mellotron::SOUNDS[i + 1],
+            _ => "",
+        };
+        self.mellotron = None;                 // (dropping it stops the sound)
+        self.start_mellotron();
+        self.store();
+    }
+
+    fn start_mellotron(&mut self) {
+        if !self.mellotron_sound.is_empty() && self.mellotron.is_none() {
+            self.mellotron = mellotron::Mellotron::start(self.mellotron_sound);
         }
     }
 
@@ -749,6 +776,10 @@ impl App {
             if ui.selectable_label(self.smooth_on, if self.smooth_on { "Smooth: on" } else { "Smooth: off" }).clicked() {
                 self.toggle_smooth();
             }
+            let mel = if self.mellotron_sound.is_empty() { "Mellotron: off".to_string() } else { format!("Mellotron: {}", self.mellotron_sound) };
+            if ui.selectable_label(!self.mellotron_sound.is_empty(), mel).on_hover_text("A built-in Mellotron the FM-1's keys play, out of this computer: flute, strings, choir, off").clicked() {
+                self.next_mellotron();
+            }
             if ui.selectable_label(self.glass_on, "Spyglass").clicked() {
                 self.glass_on = !self.glass_on;
                 self.store();
@@ -844,7 +875,8 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
             in_port,
             "FM-1 Big Screen in",
             move |_, buffer, _| {
-                // Notes from the FM-1's own keys (KEY OUT on), for the spyglass.
+                // Notes from the FM-1's own keys (KEY OUT on), for the spyglass, and for the Mellotron when it's on.
+                mellotron::feed(buffer);
                 let before = played.lock().unwrap().note_ons;
                 parser.feed(buffer, &mut played.lock().unwrap());
                 if played.lock().unwrap().note_ons != before {
@@ -944,7 +976,7 @@ impl App {
         if r.drag_stopped() || grip.drag_stopped() || (moved && !r.dragged()) {
             self.store();
         }
-        let sound = self.shared.lock().unwrap().sound.clone();
+        let sound = mellotron::label().or_else(|| self.shared.lock().unwrap().sound.clone());
         self.glass.draw(ui.painter(), c, d, sound.as_deref(), hearing, wave.as_deref());
         if ui.rect_contains_pointer(Rect::from_center_size(c, vec2(d, d))) || grip.dragged() {
             glass::draw_grip(ui.painter(), grip_at, grip.hovered() || grip.dragged());
@@ -975,6 +1007,9 @@ impl App {
 
 /// Whether the FM-1's sound is coming in, and its wave for the note on `glass`.
 fn hear(sound_in: &Mutex<scope::Ring>, glass: &glass::Glass) -> (bool, Option<Vec<f32>>) {
+    if let Some(w) = mellotron::wave(glass.hz()) {
+        return (true, Some(w));              // the Mellotron's own sound, while it plays
+    }
     let ring = sound_in.lock().unwrap();
     (ring.listening(), glass.hz().and_then(|hz| ring.wave(hz)))
 }
@@ -994,7 +1029,7 @@ fn float_ui(ctx: &egui::Context, float: &Mutex<Float>, played: &Mutex<keys::Play
         f.at = at;
         f.dirty = true;
     }
-    let sound = shared.lock().unwrap().sound.clone();
+    let sound = mellotron::label().or_else(|| shared.lock().unwrap().sound.clone());
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
         let area = ui.max_rect();
         let (c, d) = (area.center(), f.size);

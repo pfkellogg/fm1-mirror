@@ -168,10 +168,16 @@ impl Keys {
                     if pass.is_empty() {
                         return;
                     }
-                    if let Some(o) = out.lock().unwrap().clone() {
-                        let _ = o.lock().unwrap().send(&pass);
+                    // With the Mellotron on, the keyboard's notes play it instead of the FM-1 (the FM-1's own sound, a
+                    // piano say, played under the Mellotron); everything else (knobs, pedal) still goes to the FM-1.
+                    let to_fm1 = if crate::mellotron::is_on() { without_notes(&pass) } else { pass.clone() };
+                    if !to_fm1.is_empty() {
+                        if let Some(o) = out.lock().unwrap().clone() {
+                            let _ = o.lock().unwrap().send(&to_fm1);
+                        }
                     }
                     parser.feed(&pass, &mut played.lock().unwrap());
+                    crate::mellotron::feed_keys(&pass); // and the Mellotron, when it's on
                     ctx.request_repaint(); // the spyglass
                 },
                 (),
@@ -179,6 +185,26 @@ impl Keys {
             .ok()?;
         Some(Keys { name: name.to_string(), _input: connection })
     }
+}
+
+/// `m` without its Note On and Note Off messages (running status followed: notes sent as one status byte and several
+/// pairs go too); everything else passes as it is.
+fn without_notes(m: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(m.len());
+    let mut status = 0u8;
+    for &b in m {
+        if b >= 0xf8 {
+            out.push(b); // clock and the like
+        } else if b >= 0x80 {
+            status = b;
+            if !matches!(b & 0xf0, 0x80 | 0x90) {
+                out.push(b);
+            }
+        } else if !matches!(status & 0xf0, 0x80 | 0x90) {
+            out.push(b);
+        }
+    }
+    out
 }
 
 /// All notes off on every channel, so nothing hangs when the keyboard goes mid-note.
@@ -223,5 +249,12 @@ mod tests {
         // The FM-1's screen (SysEx) in between changes nothing.
         p.feed(&[0xF0, 0x7D, b'F', b'S', 1, 0, 0, 0xF7], &mut played);
         assert_eq!(played.note_ons, 4);
+    }
+
+    #[test]
+    fn with_the_mellotron_on_only_notes_stay_off_the_fm1() {
+        // notes (one with running status), a sustain pedal, clock, a program change
+        let m = [0x90, 60, 90, 64, 90, 0xb0, 64, 127, 0xf8, 0x80, 60, 0, 0xc0, 5];
+        assert_eq!(without_notes(&m), vec![0xb0, 64, 127, 0xf8, 0xc0, 5]);
     }
 }
