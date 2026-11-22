@@ -159,6 +159,8 @@ impl Keys {
         input.ignore(Ignore::None); // clock goes through too
         let port = input.ports().into_iter().find(|p| input.port_name(p).is_ok_and(|n| n == name))?;
         let (mut filter, mut parser) = (Filter::default(), Parser::default());
+        // its name for the spyglass ("Keystation 49 MK3 (USB MIDI)" -> "Keystation 49 MK3")
+        let keyboard = name.split(" (").next().unwrap_or(name).to_string();
         let connection = input
             .connect(
                 &port,
@@ -177,7 +179,7 @@ impl Keys {
                         }
                     }
                     parser.feed(&pass, &mut played.lock().unwrap());
-                    crate::mellotron::feed_keys(&pass); // and the Mellotron, when it's on
+                    crate::mellotron::feed_keys(&keyboard, &pass); // and the Mellotron, when it's on
                     ctx.request_repaint(); // the spyglass
                 },
                 (),

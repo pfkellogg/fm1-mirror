@@ -209,6 +209,8 @@ struct Engine {
     voices: Vec<Voice>,
     fm1: Parser,
     keys: Parser,
+    /// Who played the last note ("FM-1", or the keyboard's name), for the spyglass.
+    player: String,
     /// The last moment of what it played, for the spyglass's waveform.
     ring: crate::scope::Ring,
 }
@@ -344,8 +346,16 @@ fn current() -> &'static Mutex<Option<Arc<Mutex<Engine>>>> {
 }
 
 /// This computer's own sound: the default output, unless that's the FM-1 itself (then the first other one).
+/// FM1_MELLOTRON_OUTPUT=name picks another output by (part of) its name, e.g. a loopback device for recording a
+/// demo, without changing the computer's sound settings.
 fn output() -> Option<cpal::Device> {
     let host = cpal::default_host();
+    if let Ok(want) = std::env::var("FM1_MELLOTRON_OUTPUT") {
+        let want = want.to_lowercase();
+        if let Some(d) = host.output_devices().ok()?.find(|d| d.name().is_ok_and(|n| n.to_lowercase().contains(&want))) {
+            return Some(d);
+        }
+    }
     let fm1 = |d: &cpal::Device| d.name().is_ok_and(|n| crate::scope::is_fm1(&n));
     match host.default_output_device() {
         Some(d) if !fm1(&d) => Some(d),
@@ -359,7 +369,7 @@ impl Mellotron {
         let device = output()?;
         let config = device.default_output_config().ok()?;
         let (rate, channels) = (config.sample_rate().0 as f32, config.channels() as usize);
-        let engine = Arc::new(Mutex::new(Engine { sound, strips: None, voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), ring: Default::default() }));
+        let engine = Arc::new(Mutex::new(Engine { sound, strips: None, voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() }));
         let e = engine.clone();
         std::thread::spawn(move || {
             let s = strips(sound);
@@ -411,7 +421,12 @@ impl Drop for Mellotron {
 pub fn feed(m: &[u8]) {
     let e = current().lock().unwrap().clone();
     if let Some(e) = e {
-        e.lock().unwrap().parse(m);
+        let mut en = e.lock().unwrap();
+        let before = en.voices.len();
+        en.parse(m);
+        if en.voices.len() > before && en.player != "FM-1" {
+            en.player = "FM-1".to_string();
+        }
     }
 }
 
@@ -421,18 +436,22 @@ pub fn is_on() -> bool {
 }
 
 /// A keyboard's MIDI (the one FM-1 Big Screen passes on to the FM-1): it plays the Mellotron too.
-pub fn feed_keys(m: &[u8]) {
+pub fn feed_keys(name: &str, m: &[u8]) {
     let e = current().lock().unwrap().clone();
     if let Some(e) = e {
-        e.lock().unwrap().parse_from(true, m);
+        let mut en = e.lock().unwrap();
+        if m.iter().any(|&b| b & 0xf0 == 0x90) && en.player != name {
+            en.player = name.to_string();
+        }
+        en.parse_from(true, m);
     }
 }
 
-/// For the spyglass: who plays what ("FM-1 → Mellotron flute"), while it's on.
+/// For the spyglass: who plays what ("FM-1 → Mellotron flute", "Keystation 49 MK3 → Mellotron strings").
 pub fn label() -> Option<String> {
     let e = current().lock().unwrap().clone()?;
-    let s = e.lock().unwrap().sound;
-    Some(format!("FM-1 \u{2192} Mellotron {s}"))
+    let en = e.lock().unwrap();
+    Some(format!("{} \u{2192} Mellotron {}", en.player, en.sound))
 }
 
 /// For the spyglass: the Mellotron's real sound while it plays.
@@ -469,7 +488,7 @@ mod tests {
 
     #[test]
     fn screen_sysex_between_notes_makes_no_notes() {
-        let mut e = Engine { sound: "flute", strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), ring: Default::default() };
+        let mut e = Engine { sound: "flute", strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
         // a note, then a screen message whose data looks like notes, then the note let go
         e.parse(&[0x90, 60, 100]);
         e.parse(&[0xf0, 0x7d, 0x46, 0x53, 0x01, 60, 0, 61, 100, 62]);
@@ -482,7 +501,7 @@ mod tests {
 
     #[test]
     fn a_keyboard_and_the_fm1_dont_mix_their_bytes() {
-        let mut e = Engine { sound: "flute", strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), ring: Default::default() };
+        let mut e = Engine { sound: "flute", strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
         e.parse_from(false, &[0xf0, 0x7d, 0x46]);     // the FM-1 is in the middle of a screen message
         e.parse_from(true, &[0x90, 64, 90]);         // a keyboard key
         e.parse_from(false, &[61, 100, 62, 0xf7]);   // the rest of the screen message: no notes
@@ -492,7 +511,7 @@ mod tests {
 
     #[test]
     fn a_chord_stays_clean() {
-        let mut e = Engine { sound: "strings", strips: Some(strips("strings")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), ring: Default::default() };
+        let mut e = Engine { sound: "strings", strips: Some(strips("strings")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
         e.parse(&[0x90, 48, 100, 0x90, 52, 100, 0x90, 55, 100, 0x90, 60, 100]);
         let mut out = vec![0.0f32; 48000];
         e.mix(&mut out, 48000.0);
