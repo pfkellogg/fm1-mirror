@@ -365,6 +365,8 @@ struct App {
     /// The FM-1 light while the Mellotron is on: lit = you hear the FM-1 too (both sounds), dark = only the Mellotron.
     /// Remembered between sessions, like the Mellotron's (its sound).
     fm1_with_mellotron: bool,
+    /// The buttons' height when last shown: kept while they're hidden, so nothing moves.
+    bar_h: f32,
     /// Where the main window is (its top left, in points), kept so it opens there next time (the same screen).
     main_at: Option<Pos2>,
     /// "Mellotron sounds": the list online (None while it's being fetched), a message, a sound just downloaded.
@@ -461,6 +463,7 @@ impl App {
             mellotron_sound: saved["mellotron"].as_str().filter(|s| mellotron::installed().iter().any(|i| i == s)).unwrap_or("").to_string(),
             fm1_with_mellotron: saved["fm1_with_mellotron"].as_bool().unwrap_or(true),
             main_at: None,
+            bar_h: 0.0,
             sounds_open: false,
             sounds_list: Arc::default(),
             sounds_note: Arc::default(),
@@ -939,7 +942,15 @@ impl App {
         std::thread::spawn(move || install::install(progress));
     }
 
+    /// A button's width for the longest of its labels, so it doesn't change size when its label does.
+    fn width_for(ui: &egui::Ui, labels: &[&str]) -> f32 {
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let pad = ui.spacing().button_padding.x * 2.0 + 2.0;
+        labels.iter().map(|l| ui.painter().layout_no_wrap(l.to_string(), font.clone(), Color32::WHITE).size().x).fold(0.0, f32::max) + pad
+    }
+
     fn buttons(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let h = ui.spacing().interact_size.y;
         ui.horizontal_wrapped(|ui| {
             let shown = match &self.keys {
                 Some(k) => format!("Keys: {}", k.name),
@@ -966,11 +977,13 @@ impl App {
                 self.looked = None; // connect it now
                 self.store();
             }
-            if ui.button(if self.mirror_on { "Hide mirror" } else { "Show mirror" }).clicked() {
+            let w = Self::width_for(ui, &["Hide mirror", "Show mirror"]);
+            if ui.add_sized([w, h], egui::Button::new(if self.mirror_on { "Hide mirror" } else { "Show mirror" })).clicked() {
                 self.mirror_on = !self.mirror_on;
                 self.store();
             }
-            if ui.selectable_label(self.smooth_on, if self.smooth_on { "Smooth: on" } else { "Smooth: off" }).clicked() {
+            let w = Self::width_for(ui, &["Smooth: on", "Smooth: off"]);
+            if ui.add_sized([w, h], egui::SelectableLabel::new(self.smooth_on, if self.smooth_on { "Smooth: on" } else { "Smooth: off" })).clicked() {
                 self.toggle_smooth();
             }
             let mel = if !self.mellotron_sound.is_empty() {
@@ -980,7 +993,10 @@ impl App {
             } else {
                 "Mellotron: off".to_string()
             };
-            let r = ui.selectable_label(!self.mellotron_sound.is_empty(), mel)
+            let mut all: Vec<String> = mellotron::installed().iter().map(|s| format!("Mellotron: {s}")).collect();
+            all.extend(["Mellotron: get sounds".to_string(), "Mellotron: off".to_string()]);
+            let w = Self::width_for(ui, &all.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+            let r = ui.add_sized([w, h], egui::SelectableLabel::new(!self.mellotron_sound.is_empty(), mel))
                 .on_hover_text("A Mellotron the FM-1's keys play, out of this computer: click for the next sound (or off), right-click for Mellotron sounds to download");
             if r.clicked() {
                 self.next_mellotron(ctx);
@@ -1007,7 +1023,8 @@ impl App {
                 self.glass_on = !self.glass_on;
                 self.store();
             }
-            if self.glass_on && ui.selectable_label(self.glass_float, "Float").clicked() {
+            // (its room kept while the spyglass is off)
+            if ui.add_visible(self.glass_on, egui::SelectableLabel::new(self.glass_float, "Float")).clicked() {
                 self.glass_float = !self.glass_float;
                 let f = self.float.lock().unwrap();
                 self.float_open = (f.size, f.at);
@@ -1024,7 +1041,8 @@ impl App {
                 self.shared.lock().unwrap().changed = true; // repaint in the new look
                 self.store();
             }
-            if ui.button(if self.full_screen { "Leave full screen" } else { "Full screen" }).clicked() {
+            let w = Self::width_for(ui, &["Leave full screen", "Full screen"]);
+            if ui.add_sized([w, h], egui::Button::new(if self.full_screen { "Leave full screen" } else { "Full screen" })).clicked() {
                 self.full_screen = !self.full_screen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.full_screen));
             }
@@ -1056,16 +1074,23 @@ impl App {
                 Some(l) => format!("FM-1: {}", l.name),
                 None => "FM-1: not found".into(),
             };
-            ui.label(egui::RichText::new(status).color(Color32::GRAY));
+            // (a fixed width: "FM-1: not found" and a firmware's name take the same room)
+            ui.add_sized([230.0, h], egui::Label::new(egui::RichText::new(status).color(Color32::GRAY)).truncate());
             // The sound playing, standing out: big, bold, in gold on a dark chip.
-            if let Some(sound) = self.shared.lock().unwrap().sound.clone() {
+            // the sound playing, in a box of its own size (a long name is cut short, not the row reflowed); its room
+            // kept while there's none
+            let sound = self.shared.lock().unwrap().sound.clone();
+            {
+                let sound = sound.unwrap_or_default();
+                let empty = sound.is_empty();
                 egui::Frame::new()
-                    .fill(Color32::from_rgb(0x2a, 0x22, 0x0a))
-                    .stroke(egui::Stroke::new(1.5_f32, Color32::from_rgb(0xf2, 0xc0, 0x4c)))
+                    .fill(if empty { Color32::TRANSPARENT } else { Color32::from_rgb(0x2a, 0x22, 0x0a) })
+                    .stroke(if empty { egui::Stroke::NONE } else { egui::Stroke::new(1.5_f32, Color32::from_rgb(0xf2, 0xc0, 0x4c)) })
                     .corner_radius(8.0)
                     .inner_margin(egui::Margin::symmetric(10, 3))
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new(format!("\u{266a} {sound}")).size(20.0).strong().color(Color32::from_rgb(0xf2, 0xc0, 0x4c)));
+                        ui.set_width(300.0);
+                        ui.add_visible(!empty, egui::Label::new(egui::RichText::new(format!("\u{266a} {sound}")).size(20.0).strong().color(Color32::from_rgb(0xf2, 0xc0, 0x4c))).truncate());
                     });
             }
         });
@@ -1387,11 +1412,16 @@ impl eframe::App for App {
         let no_fm1 = self.link.is_none() && self.install.is_none();
         let spyglass_alone = no_fm1 && self.glass_on && !self.glass_float;
         let showing_help = (need.is_some() || self.install.is_some()) && !spyglass_alone;
-        if showing_help || self.last_move.elapsed() < BAR_FOR {
-            egui::TopBottomPanel::bottom("buttons")
+        if showing_help || self.last_move.elapsed() < BAR_FOR || self.bar_h == 0.0 {
+            let shown = egui::TopBottomPanel::bottom("buttons")
                 .frame(egui::Frame::new().fill(Color32::from_gray(28)).inner_margin(egui::Margin::same(14)))
                 .show(ctx, |ui| self.buttons(ui, ctx));
+            self.bar_h = shown.response.rect.height();
             ctx.request_repaint_after(BAR_FOR); // to hide them again
+        } else {
+            // hidden, but its room kept (dark): the FM-1's screen never changes size when the buttons come and go
+            egui::TopBottomPanel::bottom("buttons").exact_height(self.bar_h).show_separator_line(false)
+                .frame(egui::Frame::new().fill(Color32::BLACK)).show(ctx, |_| {});
         }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::BLACK)).show(ctx, |ui| {
             let area = ui.max_rect();
