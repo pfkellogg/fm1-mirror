@@ -44,7 +44,7 @@ const HELLO_EVERY: Duration = Duration::from_millis(900);
 
 /// Wanted: the FM-1's own sound turned down while the Mellotron plays (the hello thread sends it, and sends it back up
 /// when this goes false or the link is dropped).
-static FM1_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) static FM1_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Send "back up" once even if this app didn't turn it down (another app, the tablet's, may have): "No", or the
 /// Mellotron off, means the FM-1's own sound is wanted.
 static FM1_UP_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

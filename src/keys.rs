@@ -172,7 +172,8 @@ impl Keys {
                     }
                     // With the Mellotron on, the keyboard's notes play it instead of the FM-1 (the FM-1's own sound, a
                     // piano say, played under the Mellotron); everything else (knobs, pedal) still goes to the FM-1.
-                    let to_fm1 = if crate::mellotron::is_on() { without_notes(&pass) } else { pass.clone() };
+                    // the notes go to the FM-1 too unless it's turned down ("only the Mellotron": its FM-1 light is dark)
+                    let to_fm1 = if crate::mellotron::is_on() && crate::FM1_DOWN.load(std::sync::atomic::Ordering::Relaxed) { without_notes(&pass) } else { pass.clone() };
                     if !to_fm1.is_empty() {
                         if let Some(o) = out.lock().unwrap().clone() {
                             let _ = o.lock().unwrap().send(&to_fm1);
