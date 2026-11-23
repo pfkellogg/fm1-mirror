@@ -991,14 +991,16 @@ impl App {
             // Two lights: which sounds you hear. Lit (green) = you hear it. Click one to switch it.
             let mel_on = !self.mellotron_sound.is_empty();
             let fm1_on = !FM1_DOWN.load(std::sync::atomic::Ordering::Relaxed);
-            if Self::led(ui, fm1_on, "FM-1")
+            // only with a Mellotron to hear: always in Max; in Basic once a sound has been downloaded
+            let have_sounds = !mellotron::installed().is_empty();
+            if have_sounds && Self::led(ui, fm1_on, "FM-1")
                 .on_hover_text(if mel_on { "Lit: you hear the FM-1 (its own sound, and a keyboard's notes) as well as the Mellotron. Click to switch: remembered." } else { "Lit: you hear the FM-1. While the Mellotron is on, click this to choose both sounds or only the Mellotron." })
                 .clicked() && mel_on {
                 self.fm1_with_mellotron = !self.fm1_with_mellotron;
                 self.apply_fm1_light();
                 self.store();
             }
-            if Self::led(ui, mel_on, "Mellotron").on_hover_text("Lit: you hear the Mellotron. Click to turn it on or off.").clicked() {
+            if have_sounds && Self::led(ui, mel_on, "Mellotron").on_hover_text("Lit: you hear the Mellotron. Click to turn it on or off.").clicked() {
                 if mel_on { self.set_mellotron(String::new()) } else { self.next_mellotron(ctx) }
             }
             if ui.selectable_label(self.glass_on, "Spyglass").clicked() {
