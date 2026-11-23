@@ -4,8 +4,10 @@ set -e
 cd "$(dirname "$0")"
 export PATH="$HOME/.cargo/bin:$PATH"
 rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
-cargo build --release --target aarch64-apple-darwin
-cargo build --release --target x86_64-apple-darwin
+# LITE=1: the lite version, without the Mellotron's built-in sounds (it can download them)
+FEAT=""; [ "$LITE" = 1 ] && FEAT="--no-default-features"
+cargo build --release $FEAT --target aarch64-apple-darwin
+cargo build --release $FEAT --target x86_64-apple-darwin
 
 VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 NAME="FM-1 Big Screen"
@@ -13,7 +15,7 @@ APP="dist/$NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # (tools/make_icon.py draws it)
-cp -R assets/mellotron "$APP/Contents/Resources/mellotron"   # the Mellotron's strips (src/mellotron.rs)
+[ "$LITE" = 1 ] || cp -R assets/mellotron "$APP/Contents/Resources/mellotron"   # the Mellotron's strips (src/mellotron.rs)
 lipo -create -output "$APP/Contents/MacOS/fm1-mirror" \
     target/aarch64-apple-darwin/release/fm1-mirror target/x86_64-apple-darwin/release/fm1-mirror
 cat > "$APP/Contents/Info.plist" <<PLIST

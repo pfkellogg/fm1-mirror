@@ -35,7 +35,7 @@ use screen::{Screen, ASK_INFO, HELLO, HELLO_ALL, SIZE};
 
 const APP_NAME: &str = "FM-1 Big Screen";
 /// Settings stay in the folder named for the app's old name, FM-1 Mirror, so nothing is lost.
-const SETTINGS_DIR: &str = "FM-1 Mirror";
+pub(crate) const SETTINGS_DIR: &str = "FM-1 Mirror";
 /// How long the buttons stay after the mouse last moved.
 const BAR_FOR: Duration = Duration::from_secs(4);
 /// How often to say hello (the FM-1 stops sending three seconds after the last one).
@@ -327,7 +327,12 @@ struct App {
     smooth_on: bool,
     /// The built-in Mellotron while it's on (flute, strings or choir): the FM-1's keys play it, out of this computer.
     mellotron: Option<mellotron::Mellotron>,
-    mellotron_sound: &'static str,
+    mellotron_sound: String,
+    /// "Mellotron sounds": the list online (None while it's being fetched), a message, a sound just downloaded.
+    sounds_open: bool,
+    sounds_list: Arc<Mutex<Option<Result<Vec<mellotron::Pack>, String>>>>,
+    sounds_note: Arc<Mutex<Option<String>>>,
+    sounds_ready: Arc<Mutex<Option<String>>>,
     /// The spyglass floats in a window of its own, outside this one.
     glass_float: bool,
     float: Arc<Mutex<Float>>,
@@ -414,7 +419,11 @@ impl App {
             mirror_on: saved["mirror"].as_bool().unwrap_or(true),
             smooth_on: true, // always on at start (S or the button turns it off for this session)
             mellotron: None,
-            mellotron_sound: mellotron::SOUNDS.iter().copied().find(|s| saved["mellotron"] == *s).unwrap_or(""),
+            mellotron_sound: saved["mellotron"].as_str().filter(|s| mellotron::installed().iter().any(|i| i == s)).unwrap_or("").to_string(),
+            sounds_open: false,
+            sounds_list: Arc::default(),
+            sounds_note: Arc::default(),
+            sounds_ready: Arc::default(),
             glass_float: saved["spyglass_float"].as_bool().unwrap_or(false),
             float: Arc::new(Mutex::new(Float { glass: glass::Glass::default(), size: float_size, at: float_at, close: false, dirty: false })),
             float_open: (float_size, float_at),
@@ -544,22 +553,121 @@ impl App {
         }
     }
 
-    /// The Mellotron button: off, flute, strings, choir, off again (remembered).
-    fn next_mellotron(&mut self) {
-        let i = mellotron::SOUNDS.iter().position(|s| *s == self.mellotron_sound);
-        self.mellotron_sound = match i {
-            None => mellotron::SOUNDS[0],
-            Some(i) if i + 1 < mellotron::SOUNDS.len() => mellotron::SOUNDS[i + 1],
-            _ => "",
+    /// The Mellotron button: steps through the sounds this computer has (built in or downloaded), then off
+    /// (remembered). With none yet (the lite version) it opens "Mellotron sounds"; a right-click always does.
+    fn next_mellotron(&mut self, ctx: &egui::Context) {
+        let have = mellotron::installed();
+        if have.is_empty() {
+            self.open_sounds(ctx);
+            return;
+        }
+        let i = have.iter().position(|s| *s == self.mellotron_sound);
+        let next = match i {
+            None => have[0].clone(),
+            Some(i) if i + 1 < have.len() => have[i + 1].clone(),
+            _ => String::new(),
         };
+        self.set_mellotron(next);
+    }
+
+    fn set_mellotron(&mut self, sound: String) {
         self.mellotron = None;                 // (dropping it stops the sound)
+        self.mellotron_sound = sound;
         self.start_mellotron();
         self.store();
     }
 
     fn start_mellotron(&mut self) {
         if !self.mellotron_sound.is_empty() && self.mellotron.is_none() {
-            self.mellotron = mellotron::Mellotron::start(self.mellotron_sound);
+            self.mellotron = mellotron::Mellotron::start(&self.mellotron_sound);
+        }
+    }
+
+    /// Opens "Mellotron sounds" and fetches the list online (the only time the app goes online, with a download).
+    fn open_sounds(&mut self, ctx: &egui::Context) {
+        self.sounds_open = true;
+        *self.sounds_list.lock().unwrap() = None;
+        let (list, ctx) = (self.sounds_list.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            *list.lock().unwrap() = Some(mellotron::list());
+            ctx.request_repaint();
+        });
+    }
+
+    fn sounds_window(&mut self, ctx: &egui::Context) {
+        let ready = self.sounds_ready.lock().unwrap().take();
+        if let Some(id) = ready {
+            self.set_mellotron(id);            // a sound just downloaded: play it straight away
+        }
+        if !self.sounds_open {
+            return;
+        }
+        let mut open = true;
+        let list = self.sounds_list.lock().unwrap().clone();
+        let note = self.sounds_note.lock().unwrap().clone();
+        let mut remove: Option<String> = None;
+        egui::Window::new("Mellotron sounds").open(&mut open).collapsible(false).resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
+                ui.style_mut().override_text_style = Some(egui::TextStyle::Heading);
+                match &list {
+                    None => {
+                        ui.label("Getting the list of sounds…");
+                    }
+                    Some(Err(e)) => {
+                        ui.label(format!("The list of sounds can't be reached now ({e}). Check the internet connection and try again."));
+                        let have = mellotron::installed();
+                        if !have.is_empty() {
+                            ui.label(format!("On this computer: {}.", have.join(", ")));
+                        }
+                    }
+                    Some(Ok(packs)) => {
+                        egui::Grid::new("sounds").spacing(vec2(24.0, 12.0)).show(ui, |ui| {
+                            for p in packs {
+                                ui.label(&p.name);
+                                if mellotron::bundled(&p.id) {
+                                    ui.label("built in");
+                                } else if mellotron::downloaded(&p.id) {
+                                    if ui.button("Remove").clicked() {
+                                        remove = Some(p.id.clone());
+                                    }
+                                } else if note.as_deref().is_some_and(|n| n.starts_with("Downloading")) {
+                                    ui.label(format!("{:.1} MB", p.bytes as f64 / 1048576.0));
+                                } else if ui.button(format!("Download ({:.1} MB)", p.bytes as f64 / 1048576.0)).clicked() {
+                                    let (p, note, ready, ctx) = (p.clone(), self.sounds_note.clone(), self.sounds_ready.clone(), ctx.clone());
+                                    *note.lock().unwrap() = Some(format!("Downloading {}…", p.name));
+                                    std::thread::spawn(move || {
+                                        match mellotron::download(&p) {
+                                            Ok(()) => {
+                                                *note.lock().unwrap() = Some(format!("{} is ready: the Mellotron button steps through it.", p.name));
+                                                *ready.lock().unwrap() = Some(p.id.clone());
+                                            }
+                                            Err(e) => *note.lock().unwrap() = Some(format!("{} couldn't be downloaded ({e}). Try again later.", p.name)),
+                                        }
+                                        ctx.request_repaint();
+                                    });
+                                }
+                                ui.end_row();
+                            }
+                        });
+                    }
+                }
+                if let Some(n) = &note {
+                    ui.add_space(8.0);
+                    ui.label(n);
+                }
+            });
+        if let Some(id) = remove {
+            if self.mellotron_sound == id {
+                self.set_mellotron(String::new());
+            }
+            mellotron::remove(&id);
+        }
+        if !open {
+            self.sounds_open = false;
+            *self.sounds_note.lock().unwrap() = None;
+        }
+        if self.sounds_note.lock().unwrap().as_deref().is_some_and(|n| n.starts_with("Downloading")) {
+            ctx.request_repaint_after(Duration::from_millis(200));
         }
     }
 
@@ -776,9 +884,20 @@ impl App {
             if ui.selectable_label(self.smooth_on, if self.smooth_on { "Smooth: on" } else { "Smooth: off" }).clicked() {
                 self.toggle_smooth();
             }
-            let mel = if self.mellotron_sound.is_empty() { "Mellotron: off".to_string() } else { format!("Mellotron: {}", self.mellotron_sound) };
-            if ui.selectable_label(!self.mellotron_sound.is_empty(), mel).on_hover_text("A built-in Mellotron the FM-1's keys play, out of this computer: flute, strings, choir, off").clicked() {
-                self.next_mellotron();
+            let mel = if !self.mellotron_sound.is_empty() {
+                format!("Mellotron: {}", self.mellotron_sound)
+            } else if mellotron::installed().is_empty() {
+                "Mellotron: get sounds".to_string()
+            } else {
+                "Mellotron: off".to_string()
+            };
+            let r = ui.selectable_label(!self.mellotron_sound.is_empty(), mel)
+                .on_hover_text("A Mellotron the FM-1's keys play, out of this computer: click for the next sound (or off), right-click for Mellotron sounds to download");
+            if r.clicked() {
+                self.next_mellotron(ctx);
+            }
+            if r.secondary_clicked() {
+                self.open_sounds(ctx);
             }
             if ui.selectable_label(self.glass_on, "Spyglass").clicked() {
                 self.glass_on = !self.glass_on;
@@ -1081,6 +1200,7 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.sounds_window(ctx);
         self.keep_linked(ctx);
         self.take_screen(ctx);
         let (closed, dirty) = {

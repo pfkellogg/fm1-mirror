@@ -15,11 +15,16 @@ const LOW: u8 = 43;
 const HIGH: u8 = 77;
 const VOICES: usize = 16;
 
-/// The sounds, in the order the button steps through them (then off).
-pub const SOUNDS: [&str; 3] = ["flute", "strings", "choir"];
+/// The full version's built-in sounds, in the order the button steps through them (the lite version has none built
+/// in; any sound can be downloaded from the list online, INDEX).
+pub const BUILT_IN: [&str; 3] = ["flute", "strings", "choir"];
+
+/// The list of sounds online (in the Android app's repo, shared by every version): each a zip of 35 strips on a
+/// GitHub release. New sounds are added there, so the apps get them without an update.
+pub const INDEX: &str = "https://raw.githubusercontent.com/pfkellogg/fm1-mirror-spyglass-android/main/sounds/sounds.json";
 
 /// Windows and Linux: the strips built into the program.
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), feature = "bundled-sounds"))]
 static FILES: [(&str, [&[u8]; 35]); 3] = [
     ("flute", [
         include_bytes!("../assets/mellotron/flute/043.flac"),
@@ -134,29 +139,87 @@ static FILES: [(&str, [&[u8]; 35]); 3] = [
     ]),
 ];
 
-/// One strip's FLAC: on a Mac from the app's Resources (make_app.sh copies them there once, rather than into each of
-/// the program's two halves, Apple silicon and Intel), else from the program itself.
-fn flac(sound: &str, key: u8) -> Option<std::borrow::Cow<'static, [u8]>> {
+/// A built-in strip's FLAC (the full version): on a Mac from the app's Resources (make_app.sh copies them there once,
+/// rather than into each of the program's two halves, Apple silicon and Intel), else from the program itself.
+fn bundled_flac(sound: &str, key: u8) -> Option<std::borrow::Cow<'static, [u8]>> {
     #[cfg(target_os = "macos")]
     {
         let exe = std::env::current_exe().ok()?;
         let name = format!("mellotron/{sound}/{key:03}.flac");
         let res = exe.parent()?.parent()?.join("Resources").join(&name);
-        let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(&name);   // (cargo run, tests)
-        std::fs::read(res).or_else(|_| std::fs::read(dev)).ok().map(std::borrow::Cow::Owned)
+        if let Ok(b) = std::fs::read(res) {
+            return Some(std::borrow::Cow::Owned(b));
+        }
+        #[cfg(feature = "bundled-sounds")]
+        {
+            let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(&name);   // (cargo run, tests)
+            if let Ok(b) = std::fs::read(dev) {
+                return Some(std::borrow::Cow::Owned(b));
+            }
+        }
+        None
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(not(target_os = "macos"), feature = "bundled-sounds"))]
     {
         let files = FILES.iter().find(|(n, _)| *n == sound).map(|(_, f)| f)?;
         files.get((key - LOW) as usize).map(|b| std::borrow::Cow::Borrowed(*b))
     }
+    #[cfg(all(not(target_os = "macos"), not(feature = "bundled-sounds")))]
+    {
+        let _ = (sound, key);
+        None
+    }
+}
+
+/// Where downloaded sounds are kept: next to the settings, one folder each.
+fn sounds_dir() -> Option<std::path::PathBuf> {
+    Some(dirs::config_dir()?.join(crate::SETTINGS_DIR).join("sounds"))
+}
+
+fn flac(sound: &str, key: u8) -> Option<std::borrow::Cow<'static, [u8]>> {
+    bundled_flac(sound, key).or_else(|| {
+        std::fs::read(sounds_dir()?.join(sound).join(format!("{key:03}.flac"))).ok().map(std::borrow::Cow::Owned)
+    })
+}
+
+/// Built into this version.
+pub fn bundled(id: &str) -> bool {
+    bundled_flac(id, LOW).is_some()
+}
+
+/// Downloaded to this computer.
+pub fn downloaded(id: &str) -> bool {
+    sounds_dir().is_some_and(|d| d.join(id).join("043.flac").is_file() && d.join(id).join("077.flac").is_file())
+}
+
+/// The sounds this computer has (built in or downloaded): the built-in order first, then the others by name.
+pub fn installed() -> Vec<String> {
+    let mut ids: Vec<String> = BUILT_IN.iter().filter(|s| bundled(s) || downloaded(s)).map(|s| s.to_string()).collect();
+    let mut more: Vec<String> = sounds_dir()
+        .and_then(|d| std::fs::read_dir(d).ok())
+        .map(|r| r.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| !n.ends_with(".part") && downloaded(n) && !ids.contains(n)).collect())
+        .unwrap_or_default();
+    more.sort();
+    ids.extend(more);
+    ids
+}
+
+/// Changes when a sound does (downloaded again): part of its cache key.
+fn stamp(id: &str) -> String {
+    if bundled(id) {
+        return "app".into();
+    }
+    sounds_dir()
+        .and_then(|d| std::fs::metadata(d.join(id).join("077.flac")).ok()?.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or("dl".into(), |t| format!("dl{}", t.as_secs()))
 }
 
 type Set = Arc<Vec<Option<Arc<Vec<i16>>>>>;
 
 /// Sounds decoded before (a second or so each), kept for switching back instantly.
-fn cache() -> &'static Mutex<HashMap<&'static str, Set>> {
-    static C: OnceLock<Mutex<HashMap<&'static str, Set>>> = OnceLock::new();
+fn cache() -> &'static Mutex<HashMap<String, Set>> {
+    static C: OnceLock<Mutex<HashMap<String, Set>>> = OnceLock::new();
     C.get_or_init(Default::default)
 }
 
@@ -169,8 +232,9 @@ fn decode(bytes: &[u8]) -> Option<Vec<i16>> {
     Some(samples.chunks(ch.max(1)).map(|f| (f.iter().map(|&s| (s >> shift) as i64).sum::<i64>() / f.len() as i64) as i16).collect())
 }
 
-fn strips(sound: &'static str) -> Set {
-    if let Some(s) = cache().lock().unwrap().get(sound) {
+fn strips(sound: &str) -> Set {
+    let key = format!("{sound}/{}", stamp(sound));
+    if let Some(s) = cache().lock().unwrap().get(&key) {
         return s.clone();
     }
     let keys: Vec<u8> = (LOW..=HIGH).collect();
@@ -183,8 +247,88 @@ fn strips(sound: &'static str) -> Set {
         all[LOW as usize + i] = s;
     }
     let set: Set = Arc::new(all);
-    cache().lock().unwrap().insert(sound, set.clone());
+    cache().lock().unwrap().insert(key, set.clone());
     set
+}
+
+// ---- the list of sounds online, and downloads
+
+/// A sound on the list online.
+#[derive(Clone)]
+pub struct Pack {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub sha256: String,
+    pub bytes: u64,
+}
+
+/// The list of sounds online (network: call it off the window's thread).
+pub fn list() -> Result<Vec<Pack>, String> {
+    let body = ureq::get(INDEX).set("User-Agent", "FM-1-Big-Screen").call().map_err(|e| e.to_string())?.into_string().map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|_| "the list of sounds can't be read".to_string())?;
+    let ok = |id: &str| !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    Ok(v["sounds"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|o| {
+                    let id = o["id"].as_str()?.to_string();
+                    ok(&id).then(|| Pack {
+                        name: o["name"].as_str().unwrap_or(&id).to_string(),
+                        url: o["url"].as_str().unwrap_or_default().to_string(),
+                        sha256: o["sha256"].as_str().unwrap_or_default().to_string(),
+                        bytes: o["bytes"].as_u64().unwrap_or(0),
+                        id,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// Downloads a sound, checks it, and puts it in place (network and disk: off the window's thread).
+pub fn download(p: &Pack) -> Result<(), String> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut zip = Vec::new();
+    ureq::get(&p.url).set("User-Agent", "FM-1-Big-Screen").call().map_err(|e| e.to_string())?
+        .into_reader().take(200 << 20).read_to_end(&mut zip).map_err(|e| e.to_string())?;
+    if !p.sha256.is_empty() && !p.sha256.eq_ignore_ascii_case(&format!("{:x}", sha2::Sha256::digest(&zip))) {
+        return Err("the download was damaged".into());
+    }
+    let dir = sounds_dir().ok_or("no folder for sounds")?;
+    let part = dir.join(format!("{}.part", p.id));
+    let _ = std::fs::remove_dir_all(&part);
+    std::fs::create_dir_all(&part).map_err(|e| e.to_string())?;
+    let mut a = zip::ZipArchive::new(std::io::Cursor::new(zip)).map_err(|e| e.to_string())?;
+    let mut n = 0;
+    for i in 0..a.len() {
+        let mut f = a.by_index(i).map_err(|e| e.to_string())?;
+        // just the strips: no folders, no paths
+        let name = std::path::Path::new(f.name()).file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let strip = name.len() == 8 && name.ends_with(".flac") && name[..3].chars().all(|c| c.is_ascii_digit());
+        if f.is_dir() || !strip {
+            continue;
+        }
+        let mut out = std::fs::File::create(part.join(&name)).map_err(|e| e.to_string())?;
+        std::io::copy(&mut f, &mut out).map_err(|e| e.to_string())?;
+        n += 1;
+    }
+    if n < 35 {
+        let _ = std::fs::remove_dir_all(&part);
+        return Err(format!("the sound was incomplete ({n} of 35 strips)"));
+    }
+    let dest = dir.join(&p.id);
+    let _ = std::fs::remove_dir_all(&dest);
+    std::fs::rename(&part, &dest).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn remove(id: &str) {
+    if let Some(d) = sounds_dir() {
+        let _ = std::fs::remove_dir_all(d.join(id));
+    }
 }
 
 struct Voice {
@@ -204,7 +348,7 @@ struct Parser {
 }
 
 struct Engine {
-    sound: &'static str,
+    sound: String,
     strips: Option<Set>,
     voices: Vec<Voice>,
     fm1: Parser,
@@ -365,14 +509,15 @@ fn output() -> Option<cpal::Device> {
 
 impl Mellotron {
     /// Starts `sound` (one of SOUNDS): its strips load on a thread of their own (from the cache when used before).
-    pub fn start(sound: &'static str) -> Option<Mellotron> {
+    pub fn start(sound: &str) -> Option<Mellotron> {
         let device = output()?;
         let config = device.default_output_config().ok()?;
         let (rate, channels) = (config.sample_rate().0 as f32, config.channels() as usize);
-        let engine = Arc::new(Mutex::new(Engine { sound, strips: None, voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() }));
+        let engine = Arc::new(Mutex::new(Engine { sound: sound.to_string(), strips: None, voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() }));
         let e = engine.clone();
+        let name = sound.to_string();
         std::thread::spawn(move || {
-            let s = strips(sound);
+            let s = strips(&name);
             e.lock().unwrap().strips = Some(s);
         });
         let e = engine.clone();
@@ -451,7 +596,7 @@ pub fn feed_keys(name: &str, m: &[u8]) {
 pub fn label() -> Option<String> {
     let e = current().lock().unwrap().clone()?;
     let en = e.lock().unwrap();
-    Some(format!("{} \u{2192} Mellotron {}", en.player, en.sound))
+    Some(format!("{} \u{203A} Mellotron {}", en.player, en.sound))
 }
 
 /// For the spyglass: the Mellotron's real sound while it plays.
@@ -464,7 +609,7 @@ pub fn wave(hz: Option<f64>) -> Option<Vec<f32>> {
     en.ring.wave(hz?)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bundled-sounds"))]
 mod tests {
     use super::*;
 
@@ -477,7 +622,7 @@ mod tests {
 
     #[test]
     fn every_strip_decodes_to_8_seconds() {
-        for s in SOUNDS {
+        for s in BUILT_IN {
             let set = strips(s);
             for k in LOW..=HIGH {
                 let n = set[k as usize].as_ref().map_or(0, |v| v.len());
@@ -488,7 +633,7 @@ mod tests {
 
     #[test]
     fn screen_sysex_between_notes_makes_no_notes() {
-        let mut e = Engine { sound: "flute", strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
+        let mut e = Engine { sound: "flute".into(), strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
         // a note, then a screen message whose data looks like notes, then the note let go
         e.parse(&[0x90, 60, 100]);
         e.parse(&[0xf0, 0x7d, 0x46, 0x53, 0x01, 60, 0, 61, 100, 62]);
@@ -501,7 +646,7 @@ mod tests {
 
     #[test]
     fn a_keyboard_and_the_fm1_dont_mix_their_bytes() {
-        let mut e = Engine { sound: "flute", strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
+        let mut e = Engine { sound: "flute".into(), strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
         e.parse_from(false, &[0xf0, 0x7d, 0x46]);     // the FM-1 is in the middle of a screen message
         e.parse_from(true, &[0x90, 64, 90]);         // a keyboard key
         e.parse_from(false, &[61, 100, 62, 0xf7]);   // the rest of the screen message: no notes
@@ -511,7 +656,7 @@ mod tests {
 
     #[test]
     fn a_chord_stays_clean() {
-        let mut e = Engine { sound: "strings", strips: Some(strips("strings")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
+        let mut e = Engine { sound: "strings".into(), strips: Some(strips("strings")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
         e.parse(&[0x90, 48, 100, 0x90, 52, 100, 0x90, 55, 100, 0x90, 60, 100]);
         let mut out = vec![0.0f32; 48000];
         e.mix(&mut out, 48000.0);
