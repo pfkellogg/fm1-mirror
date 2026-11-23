@@ -45,6 +45,9 @@ const HELLO_EVERY: Duration = Duration::from_millis(900);
 /// Wanted: the FM-1's own sound turned down while the Mellotron plays (the hello thread sends it, and sends it back up
 /// when this goes false or the link is dropped).
 static FM1_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Send "back up" once even if this app didn't turn it down (another app, the tablet's, may have): "No", or the
+/// Mellotron off, means the FM-1's own sound is wanted.
+static FM1_UP_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The FM-1's own sound down (0) or back up (127): CC 11, EXPRESSION, on all 16 channels. SLOOP (2.7.1+) takes it as a
 /// gain over every track's LEVEL that isn't saved with the song, so nothing in a project changes and a restart is full
@@ -249,8 +252,15 @@ fn hellos(
     let mut down_sent = false; // the FM-1 turned down on this link
     while !stop.load(Ordering::Relaxed) {
         let down = FM1_DOWN.load(Ordering::Relaxed);
-        if down != down_sent && send_fm1_volume(&mut output.lock().unwrap(), !down) {
-            down_sent = down;
+        if !down && FM1_UP_ONCE.swap(false, Ordering::Relaxed) {
+            down_sent = true; // (so it's sent below)
+        }
+        if down != down_sent {
+            let ok = send_fm1_volume(&mut output.lock().unwrap(), !down);
+            eprintln!("[down] sent {} ok={ok}", if down { "DOWN" } else { "UP" });
+            if ok {
+                down_sent = down;
+            }
         }
         if hello_at.is_none_or(|t| t.elapsed() >= asker.every(HELLO_EVERY)) {
             hello_at = Some(Instant::now());
@@ -358,6 +368,8 @@ struct App {
     fm1_down_pref: String,
     /// The question is showing ("Two sounds?").
     ask_down: bool,
+    /// Where the main window is (its top left, in points), kept so it opens there next time (the same screen).
+    main_at: Option<Pos2>,
     /// "Mellotron sounds": the list online (None while it's being fetched), a message, a sound just downloaded.
     sounds_open: bool,
     sounds_list: Arc<Mutex<Option<Result<Vec<mellotron::Pack>, String>>>>,
@@ -452,6 +464,7 @@ impl App {
             mellotron_sound: saved["mellotron"].as_str().filter(|s| mellotron::installed().iter().any(|i| i == s)).unwrap_or("").to_string(),
             fm1_down_pref: saved["fm1_down"].as_str().unwrap_or("ask").to_string(),
             ask_down: false,
+            main_at: None,
             sounds_open: false,
             sounds_list: Arc::default(),
             sounds_note: Arc::default(),
@@ -471,6 +484,10 @@ impl App {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
         let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_down": self.fm1_down_pref });
+        if let Some(at) = self.main_at {
+            s["window_x"] = json!(at.x);
+            s["window_y"] = json!(at.y);
+        }
         {
             let f = self.float.lock().unwrap();
             s["spyglass_float_size"] = json!(f.size);
@@ -620,6 +637,7 @@ impl App {
         self.store();
         if self.mellotron_sound.is_empty() {
             FM1_DOWN.store(false, std::sync::atomic::Ordering::Relaxed);
+            FM1_UP_ONCE.store(true, std::sync::atomic::Ordering::Relaxed);
             self.ask_down = false;
         } else if !was_on {
             self.mellotron_came_on();
@@ -646,6 +664,7 @@ impl App {
         if !self.ask_down {
             return;
         }
+        eprintln!("[down] asking (pref {})", self.fm1_down_pref);
         let mut choice = None;
         egui::Window::new("Two sounds?").collapsible(false).resizable(false).title_bar(true)
             .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
@@ -667,12 +686,16 @@ impl App {
                 });
             });
         if let Some(c) = choice {
+            eprintln!("[down] chose {c}");
             self.ask_down = false;
             if c == 2 {
                 self.fm1_down_pref = "always".into();
                 self.store();
             }
             FM1_DOWN.store(c > 0 && !self.mellotron_sound.is_empty(), std::sync::atomic::Ordering::Relaxed);
+            if c == 0 {
+                FM1_UP_ONCE.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         }
     }
 
@@ -708,16 +731,43 @@ impl App {
         egui::Window::new("Mellotron sounds").open(&mut open).collapsible(false).resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Heading);
-                let always = self.fm1_down_pref == "always";
-                ui.label(if always { "FM-1's own sound: always turned down while the Mellotron plays." } else { "FM-1's own sound: ask each time the Mellotron comes on." });
-                if Self::big_button(ui, if always { "Ask each time instead" } else { "Always turn it down instead" }).clicked() {
-                    self.fm1_down_pref = if always { "ask" } else { "always" }.into();
-                    if !always && !self.mellotron_sound.is_empty() {
+                // the FM-1's own sound: what it is right now, and what happens when the Mellotron comes on
+                let down = FM1_DOWN.load(std::sync::atomic::Ordering::Relaxed);
+                let on = !self.mellotron_sound.is_empty();
+                ui.label(egui::RichText::new("The FM-1's own sound").strong());
+                ui.horizontal(|ui| {
+                    ui.label(if down { "Right now: turned down (you hear only the Mellotron)." }
+                        else if on { "Right now: playing (you hear the FM-1 and the Mellotron)." }
+                        else { "Right now: playing (the Mellotron is off)." });
+                    if down && Self::big_button(ui, "Turn the FM-1 back up").clicked() {
+                        FM1_DOWN.store(false, std::sync::atomic::Ordering::Relaxed);
+                        FM1_UP_ONCE.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if !down && on && Self::big_button(ui, "Turn the FM-1 down").clicked() {
                         FM1_DOWN.store(true, std::sync::atomic::Ordering::Relaxed);
                         self.ask_down = false;
                     }
-                    self.store();
-                }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("When the Mellotron comes on:");
+                    let always = self.fm1_down_pref == "always";
+                    // the choice in force is yellow; the other is plain
+                    let choice = |ui: &mut egui::Ui, text: &str, chosen: bool| {
+                        if chosen { Self::big_button(ui, text) } else { ui.add(egui::Button::new(egui::RichText::new(text).size(20.0)).min_size(vec2(0.0, 40.0))) }
+                    };
+                    if choice(ui, "Ask me", !always).clicked() && always {
+                        self.fm1_down_pref = "ask".into();
+                        self.store();
+                    }
+                    if choice(ui, "Always turn the FM-1 down", always).clicked() && !always {
+                        self.fm1_down_pref = "always".into();
+                        if on {
+                            FM1_DOWN.store(true, std::sync::atomic::Ordering::Relaxed);
+                            self.ask_down = false;
+                        }
+                        self.store();
+                    }
+                });
                 ui.separator();
                 match &list {
                     None => {
@@ -1332,6 +1382,9 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(r) = ctx.input(|i| i.viewport().outer_rect) {
+            self.main_at = Some(r.min);
+        }
         self.sounds_window(ctx);
         self.ask_down_window(ctx);
         self.keep_linked(ctx);
@@ -1433,8 +1486,15 @@ fn app_icon() -> std::sync::Arc<egui::IconData> {
 }
 
 fn main() -> eframe::Result {
+    // where the main window was last time (so it opens on the same screen)
+    let saved: Value = settings_path().and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let at = saved["window_x"].as_f64().zip(saved["window_y"].as_f64()).map(|(x, y)| [x as f32, y as f32]);
+    let mut viewport = egui::ViewportBuilder::default();
+    if let Some(at) = at {
+        viewport = viewport.with_position(at);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: viewport
             .with_title(APP_NAME)
             .with_icon(app_icon())
             .with_inner_size([900.0, 960.0])
