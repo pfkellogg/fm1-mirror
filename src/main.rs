@@ -1177,7 +1177,7 @@ impl App {
     /// The spyglass over the screen area: the first time in the room beside the FM-1's (square,
     /// centred) screen if there's enough, else top right over it. Drag to move; drag the grip or scroll to resize.
     fn spyglass(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, area: Rect) {
-        let (hearing, wave) = hear(&self.sound_in, &self.glass);
+        let (hearing, wave, wave2) = hear(&self.sound_in, &self.glass);
         if self.glass.tick(&self.played.lock().unwrap()) || self.glass.busy() || wave.is_some() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -1217,7 +1217,7 @@ impl App {
             self.store();
         }
         let sound = mellotron::label().or_else(|| self.shared.lock().unwrap().sound.clone());
-        self.glass.draw(ui.painter(), c, d, sound.as_deref(), hearing, wave.as_deref());
+        self.glass.draw(ui.painter(), c, d, sound.as_deref(), hearing, wave.as_deref(), wave2.as_deref());
         if ui.rect_contains_pointer(Rect::from_center_size(c, vec2(d, d))) || grip.dragged() {
             glass::draw_grip(ui.painter(), grip_at, grip.hovered() || grip.dragged());
         }
@@ -1246,12 +1246,19 @@ impl App {
 }
 
 /// Whether the FM-1's sound is coming in, and its wave for the note on `glass`.
-fn hear(sound_in: &Mutex<scope::Ring>, glass: &glass::Glass) -> (bool, Option<Vec<f32>>) {
-    if let Some(w) = mellotron::wave(glass.hz()) {
-        return (true, Some(w));              // the Mellotron's own sound, while it plays
-    }
+/// What the spyglass shows on the right: whether a sound is coming in, its waveform, and a second one at once. The
+/// Mellotron's own sound while it plays; with the FM-1 light lit too (both sounds), the FM-1's (from its USB sound)
+/// with the Mellotron's over it.
+fn hear(sound_in: &Mutex<scope::Ring>, glass: &glass::Glass) -> (bool, Option<Vec<f32>>, Option<Vec<f32>>) {
+    let mel = mellotron::wave(glass.hz());
     let ring = sound_in.lock().unwrap();
-    (ring.listening(), glass.hz().and_then(|hz| ring.wave(hz)))
+    let fm1_heard = !FM1_DOWN.load(std::sync::atomic::Ordering::Relaxed) && ring.listening();
+    let fm1 = if fm1_heard { glass.hz().and_then(|hz| ring.wave(hz)) } else { None };
+    match (mel, fm1_heard) {
+        (Some(m), true) => (true, fm1, Some(m)),   // both: the FM-1's, and the Mellotron's over it
+        (Some(m), false) => (true, Some(m), None), // the Mellotron's own sound
+        (None, _) => (ring.listening(), glass.hz().and_then(|hz| ring.wave(hz)), None),
+    }
 }
 
 /// One frame of the floating spyglass: drag it to move the window, the grip or a scroll to resize it.
@@ -1296,8 +1303,8 @@ fn float_ui(ctx: &egui::Context, float: &Mutex<Float>, played: &Mutex<keys::Play
         if grip.hovered() || grip.dragged() {
             ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
         }
-        let (hearing, wave) = hear(sound_in, &f.glass);
-        f.glass.draw(ui.painter(), c, d, sound.as_deref(), hearing, wave.as_deref());
+        let (hearing, wave, wave2) = hear(sound_in, &f.glass);
+        f.glass.draw(ui.painter(), c, d, sound.as_deref(), hearing, wave.as_deref(), wave2.as_deref());
         if ui.rect_contains_pointer(area) || grip.dragged() {
             glass::draw_grip(ui.painter(), grip_at, grip.hovered() || grip.dragged());
         }

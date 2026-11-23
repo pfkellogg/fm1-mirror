@@ -12,6 +12,8 @@ use crate::keys::Played;
 use crate::staff;
 
 const WAVE: Color32 = Color32::from_rgb(80, 200, 255);
+/// The second sound's waveform (the Mellotron, while the FM-1 plays too): gold.
+const WAVE2: Color32 = Color32::from_rgb(0xf2, 0xb8, 0x3c);
 const WAVE_QUIET: Color32 = Color32::from_rgb(110, 120, 130);
 const BRASS: Color32 = Color32::from_rgb(0xc9, 0x9a, 0x45);
 const BRASS_LIGHT: Color32 = Color32::from_rgb(0xf3, 0xd6, 0x8a);
@@ -113,7 +115,8 @@ impl Glass {
 
     /// The eyepiece centred on `c`, `d` across; on top, the sound playing when the FM-1 says it.
     /// `hearing`: the FM-1's sound is coming in, so the staff moves left for `wave`, its waveform.
-    pub fn draw(&self, p: &Painter, c: Pos2, d: f32, sound: Option<&str>, hearing: bool, wave: Option<&[f32]>) {
+    /// `wave2`: a second sound at once (the Mellotron while the FM-1 plays too), drawn over `wave` in gold.
+    pub fn draw(&self, p: &Painter, c: Pos2, d: f32, sound: Option<&str>, hearing: bool, wave: Option<&[f32]>, wave2: Option<&[f32]>) {
         lens(p, c, d / 2.0, d);
         if let Some(sound) = sound {
             // The sound's name across the top of the glass: warm gold letters, a little spaced, on a rounded band of
@@ -178,15 +181,19 @@ impl Glass {
             // The FM-1's real waveform, right of the staff; a flat grey line while it's quiet.
             let r = Rect::from_min_max(c + vec2(d * 0.075, -d * 0.02), c + vec2(d * 0.355, d * 0.19));
             let width = (d * 0.006).max(2.0);
+            let trace = |w: &[f32], colour: Color32| {
+                let at = |i: usize, s: f32| Pos2::new(r.left() + r.width() * i as f32 / (w.len() - 1) as f32, r.center().y - s * r.height() / 2.0);
+                let line = w.iter().enumerate().map(|(i, &s)| at(i, s)).collect();
+                p.add(egui::Shape::line(line, Stroke::new(width, colour)));
+            };
             match wave {
-                Some(w) if w.len() > 1 => {
-                    let at = |i: usize, s: f32| Pos2::new(r.left() + r.width() * i as f32 / (w.len() - 1) as f32, r.center().y - s * r.height() / 2.0);
-                    let line = w.iter().enumerate().map(|(i, &s)| at(i, s)).collect();
-                    p.add(egui::Shape::line(line, Stroke::new(width, WAVE)));
-                }
+                Some(w) if w.len() > 1 => trace(w, WAVE),
                 _ => {
                     p.line_segment([r.left_center(), r.right_center()], Stroke::new(width, WAVE_QUIET));
                 }
+            }
+            if let Some(w) = wave2.filter(|w| w.len() > 1) {
+                trace(w, WAVE2);
             }
         }
         let g = fit(detail, (d * 0.055).max(12.0), d * 0.54);
