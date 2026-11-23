@@ -19,6 +19,7 @@ mod mellotron;
 mod scope;
 mod screen;
 mod smooth;
+mod sweeten;
 mod staff;
 mod usbname;
 #[cfg(target_os = "macos")]
@@ -365,6 +366,8 @@ struct App {
     /// The FM-1 light while the Mellotron is on: lit = you hear the FM-1 too (both sounds), dark = only the Mellotron.
     /// Remembered between sessions, like the Mellotron's (its sound).
     fm1_with_mellotron: bool,
+    /// Sweeten the Mellotron (warmth and air, saturation, stereo chorus, a small room): remembered.
+    sweeten: bool,
     /// The buttons' height when last shown: kept while they're hidden, so nothing moves.
     bar_h: f32,
     /// Where the main window is (its top left, in points), kept so it opens there next time (the same screen).
@@ -462,6 +465,11 @@ impl App {
             mellotron: None,
             mellotron_sound: saved["mellotron"].as_str().filter(|s| mellotron::installed().iter().any(|i| i == s)).unwrap_or("").to_string(),
             fm1_with_mellotron: saved["fm1_with_mellotron"].as_bool().unwrap_or(true),
+            sweeten: {
+                let on = saved["sweeten"].as_bool().unwrap_or(false);
+                sweeten::ON.store(on, std::sync::atomic::Ordering::Relaxed);
+                on
+            },
             main_at: None,
             bar_h: 0.0,
             sounds_open: false,
@@ -480,7 +488,7 @@ impl App {
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten });
         if let Some(at) = self.main_at {
             s["window_x"] = json!(at.x);
             s["window_y"] = json!(at.y);
@@ -1018,6 +1026,16 @@ impl App {
             }
             if have_sounds && Self::led(ui, mel_on, "Mellotron").on_hover_text("Lit: you hear the Mellotron. Click to turn it on or off.").clicked() {
                 if mel_on { self.set_mellotron(String::new()) } else { self.next_mellotron(ctx) }
+            }
+            if have_sounds {
+                let w = Self::width_for(ui, &["Sweeten: on", "Sweeten: off"]);
+                if ui.add_sized([w, h], egui::SelectableLabel::new(self.sweeten, if self.sweeten { "Sweeten: on" } else { "Sweeten: off" }))
+                    .on_hover_text("The Mellotron as a good stereo makes it: a little warmth and air, soft tape saturation, stereo width and a small room")
+                    .clicked() {
+                    self.sweeten = !self.sweeten;
+                    sweeten::ON.store(self.sweeten, std::sync::atomic::Ordering::Relaxed);
+                    self.store();
+                }
             }
             if ui.selectable_label(self.glass_on, "Spyglass").clicked() {
                 self.glass_on = !self.glass_on;

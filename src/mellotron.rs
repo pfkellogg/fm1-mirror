@@ -522,27 +522,36 @@ impl Mellotron {
         });
         let e = engine.clone();
         let mut mono = Vec::new();
-        let mut render = move |frames: usize| -> Vec<f32> {
+        let mut sweet = crate::sweeten::Sweeten::new(rate);
+        // the mix, then Sweeten (stereo; straight through while it's off): left and right per frame
+        let mut render = move |frames: usize| -> Vec<(f32, f32)> {
             mono.resize(frames, 0.0);
             if let Ok(mut en) = e.lock() {
                 en.mix(&mut mono, rate);
             }
-            mono.clone()
+            mono.iter().map(|&x| sweet.run(x)).collect()
+        };
+        // a frame's channels: left, right, and any more the average (a mono output: the average)
+        let put = move |f: &mut [f32], (l, r): (f32, f32)| match f.len() {
+            1 => f[0] = (l + r) * 0.5,
+            _ => f.iter_mut().enumerate().for_each(|(i, x)| *x = match i { 0 => l, 1 => r, _ => (l + r) * 0.5 }),
         };
         let err = |e| eprintln!("mellotron: {e}");
         let stream_config: cpal::StreamConfig = config.clone().into();
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => device.build_output_stream(&stream_config, move |d: &mut [f32], _: &_| {
                 let m = render(d.len() / channels);
-                for (f, s) in d.chunks_mut(channels).zip(m) { f.iter_mut().for_each(|x| *x = s); }
+                for (f, s) in d.chunks_mut(channels).zip(m) { put(f, s); }
             }, err, None),
             cpal::SampleFormat::I16 => device.build_output_stream(&stream_config, move |d: &mut [i16], _: &_| {
                 let m = render(d.len() / channels);
-                for (f, s) in d.chunks_mut(channels).zip(m) { f.iter_mut().for_each(|x| *x = (s * 32767.0) as i16); }
+                let mut tmp = vec![0.0f32; channels];
+                for (f, s) in d.chunks_mut(channels).zip(m) { put(&mut tmp, s); f.iter_mut().zip(&tmp).for_each(|(x, v)| *x = (v * 32767.0) as i16); }
             }, err, None),
             cpal::SampleFormat::I32 => device.build_output_stream(&stream_config, move |d: &mut [i32], _: &_| {
                 let m = render(d.len() / channels);
-                for (f, s) in d.chunks_mut(channels).zip(m) { f.iter_mut().for_each(|x| *x = (s as f64 * 2147483647.0) as i32); }
+                let mut tmp = vec![0.0f32; channels];
+                for (f, s) in d.chunks_mut(channels).zip(m) { put(&mut tmp, s); f.iter_mut().zip(&tmp).for_each(|(x, v)| *x = (*v as f64 * 2147483647.0) as i32); }
             }, err, None),
             _ => return None,
         }
