@@ -8,6 +8,7 @@
 //! Keys plays the FM-1 from a keyboard through the app, and the spyglass beside the screen shows
 //! what's played (keys.rs, glass.rs), as in FM-1 Big Screen + Spyglass on Android.
 
+mod bigscreen2;
 mod chord;
 mod fm1base;
 mod glass;
@@ -31,7 +32,7 @@ use eframe::egui::{self, vec2, Align2, Color32, ColorImage, FontId, Pos2, Rect, 
 use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use serde_json::{json, Value};
 
-use screen::{Screen, ASK_INFO, HELLO, HELLO_ALL, SIZE};
+use screen::{Screen, ASK_INFO, SIZE};
 
 const APP_NAME: &str = "FM-1 Big Screen";
 /// Settings stay in the folder named for the app's old name, FM-1 Mirror, so nothing is lost.
@@ -188,6 +189,8 @@ struct Shared {
     firmware: Option<String>,
     /// The sound playing, when the firmware says it ("T1 FM6 ICE BELL"): shown after "FM-1" on top.
     sound: Option<String>,
+    /// Big Screen version 2 (konsumer's): the frame being put together, shown whole.
+    v2: bigscreen2::Viewer,
 }
 
 /// The FM-1's MIDI ports (USB or Bluetooth), open both ways.
@@ -221,21 +224,24 @@ fn hellos(
     stop: Arc<std::sync::atomic::AtomicBool>,
     lost: Arc<std::sync::atomic::AtomicBool>,
     base: Arc<std::sync::atomic::AtomicBool>,
+    v2_answers: Arc<std::sync::atomic::AtomicU32>,
 ) {
     use std::sync::atomic::Ordering;
     const BASE_ASK_AT: [u64; 3] = [1000, 5000, 6000]; // ms after opening: clear of the questions at 2, 3 and 4 s
     let opened = Instant::now();
     let (mut base_asked, mut base_at) = (0usize, Instant::now());
-    let (mut asked_identity, mut asked_build, mut asked_info, mut first) = (false, false, false, true);
+    let (mut asked_identity, mut asked_build, mut asked_info) = (false, false, false);
     let mut hello_at: Option<Instant> = None;
+    // Big Screen version 2 first (konsumer's: whole frames, less to send); version 1 if the firmware doesn't answer.
+    let mut asker = bigscreen2::Asker::default();
     while !stop.load(Ordering::Relaxed) {
-        if hello_at.is_none_or(|t| t.elapsed() >= HELLO_EVERY) {
+        if hello_at.is_none_or(|t| t.elapsed() >= asker.every(HELLO_EVERY)) {
             hello_at = Some(Instant::now());
-            if output.lock().unwrap().send(if first { &HELLO_ALL } else { &HELLO }).is_err() {
+            let hello = asker.next(v2_answers.load(Ordering::Relaxed));
+            if output.lock().unwrap().send(&hello).is_err() {
                 lost.store(true, Ordering::Relaxed);
                 return;
             }
-            first = false;
         }
         if !asked_identity && opened.elapsed() > Duration::from_secs(2) {
             asked_identity = true;
@@ -533,6 +539,13 @@ impl App {
     fn take_screen(&mut self, ctx: &egui::Context) {
         let pixels = {
             let mut s = self.shared.lock().unwrap();
+            if s.v2.overdue() {
+                // version 2 with no SYNC for a while (the screen changes faster than it can be sent): show what came
+                let s = &mut *s;
+                s.v2.show(&mut s.screen.pixels);
+                s.last = Some(Instant::now());
+                s.changed = true;
+            }
             if !s.changed {
                 return;
             }
@@ -989,6 +1002,8 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
     let mut parser = keys::Parser::default();
     let base: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let base_in = base.clone();
+    let v2_answers: Arc<std::sync::atomic::AtomicU32> = Arc::default();
+    let v2_in = v2_answers.clone();
     let input = input
         .connect(
             in_port,
@@ -1025,6 +1040,21 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                         ctx.request_repaint();
                     }
                 }
+                // Big Screen version 2: its answer, rectangles into the next frame, and the frame shown whole.
+                match s.v2.apply(m) {
+                    bigscreen2::Got::Info => {
+                        v2_in.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    bigscreen2::Got::Painted => ctx.request_repaint_after(bigscreen2::SHOW_AFTER),
+                    bigscreen2::Got::Frame => {
+                        let s = &mut *s;
+                        s.v2.show(&mut s.screen.pixels);
+                        s.last = Some(Instant::now());
+                        s.changed = true;
+                        ctx.request_repaint();
+                    }
+                    bigscreen2::Got::Nothing => {}
+                }
                 if s.screen.apply(m) {
                     s.last = Some(Instant::now());
                     s.changed = true;
@@ -1048,7 +1078,7 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
     let stop: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let lost: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let (st, lo, out) = (stop.clone(), lost.clone(), output.clone());
-    std::thread::spawn(move || hellos(out, st, lo, base));
+    std::thread::spawn(move || hellos(out, st, lo, base, v2_answers));
     Some(Link { name, _input: input, out: output, opened: Instant::now(), stop, lost })
 }
 
