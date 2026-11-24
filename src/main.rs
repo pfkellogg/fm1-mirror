@@ -380,6 +380,8 @@ struct App {
     knobs_on: bool,
     lights_on: bool,
     knobs: knobs::Knobs,
+    /// The buttons and keys held down on the Lights strip (bit id), pressing the real ones.
+    panel_held: u64,
     /// The buttons' height when last shown: kept while they're hidden, so nothing moves.
     bar_h: f32,
     /// Where the main window is (its top left, in points), kept so it opens there next time (the same screen).
@@ -473,6 +475,7 @@ impl App {
             knobs_on: saved["knobs"].as_bool().unwrap_or(false),
             lights_on: saved["lights"].as_bool().unwrap_or(false),
             knobs: knobs::Knobs::default(),
+            panel_held: 0,
             glass_at: saved["spyglass_x"].as_f64().zip(saved["spyglass_y"].as_f64()).map(|(x, y)| (x as f32, y as f32)),
             glass_size: saved["spyglass_size"].as_f64().map(|d| d as f32),
             mirror_on: saved["mirror"].as_bool().unwrap_or(true),
@@ -1512,11 +1515,24 @@ impl eframe::App for App {
         }
         if self.lights_on && !showing_help {
             let played = self.played.lock().unwrap().keys_down();
+            let out = self.link.as_ref().map(|l| l.out.clone());
+            let held = &mut self.panel_held;
             let got = self.shared.lock().unwrap().lights;
             let (l, seen) = (got.unwrap_or_default(), got.is_some());
             egui::TopBottomPanel::bottom("lights").exact_height(150.0).show_separator_line(false)
                 .frame(egui::Frame::new().fill(Color32::from_gray(12)).inner_margin(egui::Margin::same(6)))
-                .show(ctx, |ui| knobs::lights_ui(ui, l, knobs::played_keys(&played), seen));
+                .show(ctx, |ui| knobs::lights_ui(ui, l, knobs::played_keys(&played), seen, held, &mut |id, down| {
+                    let Some(o) = &out else { return };
+                    if fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+                        let mut panel = fm1base::PANEL.lock().unwrap();
+                        panel.press(id, down);
+                        if let Some(f) = panel.next() {
+                            let _ = o.lock().unwrap().send(&f);
+                        }
+                    } else {
+                        let _ = o.lock().unwrap().send(&knobs::press(id, down));
+                    }
+                }));
         }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::BLACK)).show(ctx, |ui| {
             let area = ui.max_rect();

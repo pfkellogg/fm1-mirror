@@ -88,9 +88,12 @@ pub struct Remote {
     waiting: Option<std::time::Instant>,
     turns: [i32; 7],
     master: Option<u16>,
+    /// Presses and lets-go, in order (op 1 a button, op 2 a key; a, down).
+    presses: std::collections::VecDeque<(u8, u8, u8)>,
 }
 
-pub static PANEL: std::sync::Mutex<Remote> = std::sync::Mutex::new(Remote { seq: 0, waiting: None, turns: [0; 7], master: None });
+pub static PANEL: std::sync::Mutex<Remote> =
+    std::sync::Mutex::new(Remote { seq: 0, waiting: None, turns: [0; 7], master: None, presses: std::collections::VecDeque::new() });
 
 impl Remote {
     /// One of our knobs (knobs.rs: 0 SELECT, 1 ALGORITHM, 2..5 KNOB 1..4, 6 PRESETS) turned `n` clicks.
@@ -102,6 +105,15 @@ impl Remote {
     pub fn master(&mut self, v: u16) {
         self.master = Some((v.min(1023) as u32 * 4096 / 1023) as u16);
     }
+    /// Our button (0..13: knobs.rs BUTTONS) or key (14 + k) pressed or let go.
+    pub fn press(&mut self, id: u8, down: bool) {
+        let ev = if id < 14 {
+            (1, if id >= 2 { id - 2 } else { 12 + id }, down as u8) // its B_*: FX.. REC, then OCT- OCT+
+        } else {
+            (2, (id - 14).min(26), down as u8)
+        };
+        self.presses.push_back(ev);
+    }
     pub fn answered(&mut self) {
         self.waiting = None;
     }
@@ -110,7 +122,9 @@ impl Remote {
         if self.waiting.is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(300)) {
             return None;
         }
-        let body = if let Some(e) = self.turns.iter().position(|&t| t != 0) {
+        let body = if let Some((op, a, b)) = self.presses.pop_front() {
+            [op, a, b, 0]
+        } else if let Some(e) = self.turns.iter().position(|&t| t != 0) {
             let n = std::mem::take(&mut self.turns[e]);
             [3, e as u8, n as i8 as u8, 0]
         } else if let Some(v) = self.master.take() {
@@ -260,6 +274,12 @@ mod tests {
         r.answered();
         assert!(r.next().is_none());
         assert_eq!((r.turns, r.seq), ([0; 7], 2));
+        r.press(0, true); // OCT- down: its B_OCTDN (12)
+        r.press(8, true); // HOME: its B_HOME (6)
+        let f = r.next().unwrap();
+        assert_eq!(parse(&f).unwrap().1, vec![3, 1, 12, 1, 0]);
+        r.answered();
+        assert_eq!(parse(&r.next().unwrap()).unwrap().1, vec![4, 1, 6, 1, 0]);
     }
 
     /// A device frame, as the firmware builds one.

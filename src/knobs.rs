@@ -4,6 +4,8 @@
 //! - Big Knobs, to the FM-1: `F0 7D 'F' 'S' 04 e n F7` turns encoder e (0 SELECT, 1 ALGORITHM, 2..5 KNOB 1..4,
 //!   6 PRESETS) n clicks (7-bit signed: 1..63 clockwise, 127..65 = -1..-63), as if turned by hand;
 //!   `F0 7D 'F' 'S' 06 lo hi F7` sets MASTER (0..1023) until its real knob moves;
+//! - Remote panel, to the FM-1: `F0 7D 'F' 'S' 07 id down F7` presses (1) or lets go (0) button id (0..13) or key
+//!   14 + k (F3 = 14), as a finger would (holds and combinations work); all let go when we stop asking;
 //! - Key Lights, from the FM-1 while we ask for the screen: `F0 7D 'F' 'S' 05 k0 k1 k2 k3 b0 b1 [g0..g3 h0 h1] F7`, the
 //!   lit keys (bit k = key k, F3 .. G5, 7 bits a byte) and buttons (bit i = button i, 0..13), then (from firmware that
 //!   has them) the ones only glowing (dim, breathing, mid-level) the same way.
@@ -23,6 +25,11 @@ const DRAG_PER_CLICK: f32 = 12.0;
 pub fn turn(e: u8, clicks: i32) -> [u8; 8] {
     let n = clicks.clamp(-63, 63);
     [0xF0, 0x7D, b'F', b'S', 4, e & 7, (n & 127) as u8, 0xF7]
+}
+
+/// Press (`down`) or let go of button or key `id` (0..13 buttons, 14..40 keys).
+pub fn press(id: u8, down: bool) -> [u8; 8] {
+    [0xF0, 0x7D, b'F', b'S', 7, id.min(40), down as u8, 0xF7]
 }
 
 /// MASTER to `v` (0..1023).
@@ -141,7 +148,10 @@ pub fn played_keys(notes: &[u8]) -> u32 {
 
 /// The FM-1's buttons and its 27 keys (F3 .. G5), big: lit (amber) as they are on the FM-1, and blue while a note on
 /// them is being played (the FM-1's own keys, or a keyboard through Keys). `seen`: Key Lights have come.
-pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool) {
+/// `held`: the buttons and keys the pointer holds down now (bit id); `press` gets each change (id, down), so a click
+/// or a hold on the strip presses the real one.
+pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool, held: &mut u64, press: &mut dyn FnMut(u8, bool)) {
+    let mut now_held = 0u64;
     let (keys, btns) = (l.keys, l.btns);
     let area = ui.available_rect_before_wrap();
     let p = ui.painter();
@@ -154,7 +164,10 @@ pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool) {
     let bw = area.width() / BUTTON_ROW.len() as f32;
     for (j, &id) in BUTTON_ROW.iter().enumerate() {
         let r = Rect::from_min_size(Pos2::new(area.left() + bw * j as f32, area.top()), vec2(bw, bh)).shrink(3.0);
-        let on = btns >> id & 1 == 1;
+        if ui.interact(r, ui.id().with(("btn", id)), Sense::click_and_drag()).is_pointer_button_down_on() {
+            now_held |= 1 << id;
+        }
+        let on = btns >> id & 1 == 1 || now_held >> id & 1 == 1;
         let dim = l.glow_btns >> id & 1 == 1;
         p.rect_filled(r, 6.0, if on { glow } else if dim { soft_btn } else { Color32::from_gray(45) });
         p.text(r.center(), Align2::CENTER_CENTER, BUTTONS[id], FontId::proportional((bh * 0.42).clamp(10.0, 17.0)),
@@ -176,9 +189,22 @@ pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool) {
             w += 1;
         }
     }
+    // black keys first, so a press on one isn't also the white key under it
+    let black_rect = |i: usize| Rect::from_min_size(Pos2::new(area.left() + ww * i as f32 - ww * 0.32, top), vec2(ww * 0.64, kh * 0.6));
+    let pointer = ui.input(|inp| inp.pointer.interact_pos());
+    let on_black = pointer.is_some_and(|pt| black.iter().any(|&(_, i)| black_rect(i).contains(pt)));
+    for &(k, i) in &black {
+        if ui.interact(black_rect(i), ui.id().with(("key", k)), Sense::click_and_drag()).is_pointer_button_down_on() {
+            now_held |= 1 << (14 + k);
+        }
+    }
     for &(k, i) in &white {
         let r = Rect::from_min_size(Pos2::new(area.left() + ww * i as f32, top), vec2(ww, kh)).shrink2(vec2(1.5, 0.0));
-        let on = keys >> k & 1 == 1;
+        if !on_black && ui.interact(r, ui.id().with(("key", k)), Sense::click_and_drag()).is_pointer_button_down_on() {
+            now_held |= 1 << (14 + k);
+        }
+        let p = ui.painter();
+        let on = keys >> k & 1 == 1 || now_held >> (14 + k) & 1 == 1;
         let play = played >> k & 1 == 1;
         let dim = l.glow_keys >> k & 1 == 1;
         p.rect_filled(r, 4.0, if on { glow } else if play { Color32::from_rgb(110, 175, 255) } else if dim { soft_white } else { Color32::from_gray(200) });
@@ -186,9 +212,10 @@ pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool) {
             p.rect_stroke(r.shrink(2.0), 4.0, Stroke::new(4.0_f32, Color32::from_rgb(40, 110, 230)), egui::StrokeKind::Inside);
         }
     }
+    let p = ui.painter();
     for &(k, i) in &black {
-        let r = Rect::from_min_size(Pos2::new(area.left() + ww * i as f32 - ww * 0.32, top), vec2(ww * 0.64, kh * 0.6));
-        let on = keys >> k & 1 == 1;
+        let r = black_rect(i);
+        let on = keys >> k & 1 == 1 || now_held >> (14 + k) & 1 == 1;
         let play = played >> k & 1 == 1;
         let dim = l.glow_keys >> k & 1 == 1;
         p.rect_filled(r, 3.0, if on { Color32::from_rgb(255, 170, 40) } else if play { Color32::from_rgb(60, 130, 240) } else if dim { soft_black } else { Color32::from_gray(25) });
@@ -201,6 +228,13 @@ pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool) {
             "No lights from this firmware yet: Key Lights need a Big Screen build from aikellogg.com",
             FontId::proportional(14.0), Color32::from_gray(90));
     }
+    for id in 0..41u8 {
+        let (was, is) = (*held >> id & 1 == 1, now_held >> id & 1 == 1);
+        if was != is {
+            press(id, is);
+        }
+    }
+    *held = now_held;
     ui.advance_cursor_after_rect(Rect::from_min_max(area.min, Pos2::new(area.right(), top + kh)));
 }
 
