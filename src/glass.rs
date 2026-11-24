@@ -14,7 +14,7 @@ use crate::staff;
 const WAVE: Color32 = Color32::from_rgb(80, 200, 255);
 /// The second sound's waveform (the Mellotron, while the FM-1 plays too): gold.
 const WAVE2: Color32 = Color32::from_rgb(0xf2, 0xb8, 0x3c);
-const WAVE_QUIET: Color32 = Color32::from_rgb(110, 120, 130);
+
 const BRASS: Color32 = Color32::from_rgb(0xc9, 0x9a, 0x45);
 const BRASS_LIGHT: Color32 = Color32::from_rgb(0xf3, 0xd6, 0x8a);
 const BRASS_DARK: Color32 = Color32::from_rgb(0x8a, 0x62, 0x24);
@@ -178,7 +178,7 @@ impl Glass {
         let staff_x = if hearing { -d * 0.165 } else { 0.0 };
         staff::draw(p, Rect::from_center_size(c + vec2(staff_x, d * 0.087), vec2(w, w * 1.06)), &keys, GLASS, TEXT);
         if hearing {
-            // The FM-1's real waveform, right of the staff; a flat grey line while it's quiet.
+            // The FM-1's real waveform, right of the staff, only while there is one (no flat line when it's quiet).
             let r = Rect::from_min_max(c + vec2(d * 0.075, -d * 0.02), c + vec2(d * 0.355, d * 0.19));
             let width = (d * 0.006).max(2.0);
             let trace = |w: &[f32], colour: Color32| {
@@ -186,11 +186,8 @@ impl Glass {
                 let line = w.iter().enumerate().map(|(i, &s)| at(i, s)).collect();
                 p.add(egui::Shape::line(line, Stroke::new(width, colour)));
             };
-            match wave {
-                Some(w) if w.len() > 1 => trace(w, WAVE),
-                _ => {
-                    p.line_segment([r.left_center(), r.right_center()], Stroke::new(width, WAVE_QUIET));
-                }
+            if let Some(w) = wave.filter(|w| w.len() > 1) {
+                trace(w, WAVE);
             }
             if let Some(w) = wave2.filter(|w| w.len() > 1) {
                 trace(w, WAVE2);

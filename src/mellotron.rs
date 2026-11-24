@@ -172,7 +172,7 @@ fn bundled_flac(sound: &str, key: u8) -> Option<std::borrow::Cow<'static, [u8]>>
 }
 
 /// Where downloaded sounds are kept: next to the settings, one folder each.
-fn sounds_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn sounds_dir() -> Option<std::path::PathBuf> {
     Some(dirs::config_dir()?.join(crate::SETTINGS_DIR).join("sounds"))
 }
 
@@ -195,9 +195,12 @@ pub fn downloaded(id: &str) -> bool {
 /// The sounds this computer has (built in or downloaded): the built-in order first, then the others by name.
 pub fn installed() -> Vec<String> {
     let mut ids: Vec<String> = BUILT_IN.iter().filter(|s| bundled(s) || downloaded(s)).map(|s| s.to_string()).collect();
+    if crate::rich::downloaded() {
+        ids.push(crate::rich::ID.to_string());       // Rich: GeneralUser GS, the closest instrument to the FM-1's sound
+    }
     let mut more: Vec<String> = sounds_dir()
         .and_then(|d| std::fs::read_dir(d).ok())
-        .map(|r| r.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| !n.ends_with(".part") && downloaded(n) && !ids.contains(n)).collect())
+        .map(|r| r.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| !n.ends_with(".part") && n != crate::rich::ID && downloaded(n) && !ids.contains(n)).collect())
         .unwrap_or_default();
     more.sort();
     ids.extend(more);
@@ -357,6 +360,8 @@ struct Engine {
     player: String,
     /// The last moment of what it played, for the spyglass's waveform.
     ring: crate::scope::Ring,
+    /// Rich instead of strips: GeneralUser GS (rich.rs)
+    rich: Option<crate::rich::Rich>,
 }
 
 impl Engine {
@@ -392,9 +397,14 @@ impl Engine {
             };
             p.d1 = None;
             match kind {
-                0x90 if b > 0 => self.note_on(d1),
+                0x90 if b > 0 => self.note_on(d1, b),
                 0x80 | 0x90 => self.note_off(d1),
-                0xb0 if d1 == 120 || d1 == 123 => self.voices.iter_mut().for_each(|v| v.released = true),
+                0xb0 if d1 == 120 || d1 == 123 => {
+                    self.voices.iter_mut().for_each(|v| v.released = true);
+                    if let Some(r) = &mut self.rich {
+                        r.all_off();
+                    }
+                }
                 _ => {}
             }
         }
@@ -405,7 +415,11 @@ impl Engine {
         self.parse_from(false, m);
     }
 
-    fn note_on(&mut self, note: u8) {
+    fn note_on(&mut self, note: u8, vel: u8) {
+        if let Some(r) = &mut self.rich {
+            r.note_on(note, vel);                    // Rich: every key as played, with its velocity
+            return;
+        }
         let key = fold(note);
         let Some(data) = self.strips.as_ref().and_then(|s| s[key as usize].clone()) else { return };
         for v in self.voices.iter_mut().filter(|v| v.key == key) {
@@ -418,6 +432,10 @@ impl Engine {
     }
 
     fn note_off(&mut self, note: u8) {
+        if let Some(r) = &mut self.rich {
+            r.note_off(note);
+            return;
+        }
         let key = fold(note);
         for v in self.voices.iter_mut().filter(|v| v.key == key) {
             v.released = true;
@@ -427,6 +445,17 @@ impl Engine {
     /// `out` mono at `rate`: the strips (44.1 kHz) stepped to it, a 4 ms start, 0.12 s fade when let go, headroom for
     /// chords and only squeezed near the top (Android 1.6.9's fixes).
     fn mix(&mut self, out: &mut [f32], rate: f32) {
+        if let Some(r) = &mut self.rich {
+            r.render(out);                           // Rich: the SoundFont's own level, squeezed only near the top
+            let mut loud = 0.0f32;
+            for s in out.iter_mut() {
+                let a = s.abs();
+                *s = if a > 0.8 { s.signum() * (0.8 + 0.2 * ((a - 0.8) / 0.2).tanh()) } else { *s };
+                loud = loud.max(s.abs());
+            }
+            self.ring.take(out, rate, loud > 0.002);
+            return;
+        }
         out.iter_mut().for_each(|s| *s = 0.0);
         let step = RATE / rate as f64;
         let attack = 1.0 / (0.004 * rate);
@@ -513,10 +542,15 @@ impl Mellotron {
         let device = output()?;
         let config = device.default_output_config().ok()?;
         let (rate, channels) = (config.sample_rate().0 as f32, config.channels() as usize);
-        let engine = Arc::new(Mutex::new(Engine { sound: sound.to_string(), strips: None, voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() }));
+        let engine = Arc::new(Mutex::new(Engine { sound: sound.to_string(), strips: None, voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None }));
         let e = engine.clone();
         let name = sound.to_string();
         std::thread::spawn(move || {
+            if name == crate::rich::ID {
+                let r = crate::rich::Rich::new(rate as u32);       // (the SoundFont read once: ~1 s the first time)
+                e.lock().unwrap().rich = r;
+                return;
+            }
             let s = strips(&name);
             e.lock().unwrap().strips = Some(s);
         });
@@ -605,6 +639,9 @@ pub fn feed_keys(name: &str, m: &[u8]) {
 pub fn label() -> Option<String> {
     let e = current().lock().unwrap().clone()?;
     let en = e.lock().unwrap();
+    if en.sound == crate::rich::ID {
+        return Some(format!("{} \u{203A} Rich {}", en.player, crate::rich::GM[crate::rich::program() as usize]));
+    }
     Some(format!("{} \u{203A} Mellotron {}", en.player, en.sound))
 }
 
@@ -642,7 +679,7 @@ mod tests {
 
     #[test]
     fn screen_sysex_between_notes_makes_no_notes() {
-        let mut e = Engine { sound: "flute".into(), strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
+        let mut e = Engine { sound: "flute".into(), strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None };
         // a note, then a screen message whose data looks like notes, then the note let go
         e.parse(&[0x90, 60, 100]);
         e.parse(&[0xf0, 0x7d, 0x46, 0x53, 0x01, 60, 0, 61, 100, 62]);
@@ -655,7 +692,7 @@ mod tests {
 
     #[test]
     fn a_keyboard_and_the_fm1_dont_mix_their_bytes() {
-        let mut e = Engine { sound: "flute".into(), strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
+        let mut e = Engine { sound: "flute".into(), strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None };
         e.parse_from(false, &[0xf0, 0x7d, 0x46]);     // the FM-1 is in the middle of a screen message
         e.parse_from(true, &[0x90, 64, 90]);         // a keyboard key
         e.parse_from(false, &[61, 100, 62, 0xf7]);   // the rest of the screen message: no notes
@@ -665,7 +702,7 @@ mod tests {
 
     #[test]
     fn a_chord_stays_clean() {
-        let mut e = Engine { sound: "strings".into(), strips: Some(strips("strings")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default() };
+        let mut e = Engine { sound: "strings".into(), strips: Some(strips("strings")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None };
         e.parse(&[0x90, 48, 100, 0x90, 52, 100, 0x90, 55, 100, 0x90, 60, 100]);
         let mut out = vec![0.0f32; 48000];
         e.mix(&mut out, 48000.0);

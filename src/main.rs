@@ -17,6 +17,7 @@ mod install;
 mod keys;
 mod knobs;
 mod mellotron;
+mod rich;
 mod scope;
 mod screen;
 mod smooth;
@@ -450,6 +451,12 @@ impl App {
         style.spacing.button_padding = vec2(18.0, 10.0);
         style.spacing.item_spacing = vec2(12.0, 12.0);
         style.spacing.interact_size.y = 44.0;
+        // Rounded buttons, every one (the bar's, the panels', the dialogs')
+        let round = egui::CornerRadius::same(12);
+        for w in [&mut style.visuals.widgets.inactive, &mut style.visuals.widgets.hovered, &mut style.visuals.widgets.active,
+                  &mut style.visuals.widgets.open, &mut style.visuals.widgets.noninteractive] {
+            w.corner_radius = round;
+        }
         ctx.set_style(style);
         let saved: Value = settings_path()
             .and_then(|p| std::fs::read_to_string(p).ok())
@@ -479,7 +486,10 @@ impl App {
             keys_changed: false,
             glass: glass::Glass::default(),
             glass_on: saved["spyglass"].as_bool().unwrap_or(true),
-            knobs_on: saved["knobs"].as_bool().unwrap_or(false),
+            knobs_on: {
+                *rich::PICK.lock().unwrap() = saved["rich_pick"].as_u64().filter(|&p| p < 128).map(|p| p as u8);
+                saved["knobs"].as_bool().unwrap_or(false)
+            },
             lights_on: saved["lights"].as_bool().unwrap_or(false),
             knobs: knobs::Knobs::default(),
             panel_held: 0,
@@ -513,7 +523,7 @@ impl App {
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap() });
         if let Some(at) = self.main_at {
             s["window_x"] = json!(at.x);
             s["window_y"] = json!(at.y);
@@ -644,6 +654,7 @@ impl App {
 
     /// The Mellotron button: steps through the sounds this computer has (built in or downloaded), then off
     /// (remembered). With none yet (the lite version) it opens "Mellotron sounds"; a right-click always does.
+    #[allow(dead_code)] // (the old Mellotron button stepped through the sounds: the Sound menu picks one)
     fn next_mellotron(&mut self, ctx: &egui::Context) {
         let have = mellotron::installed();
         if have.is_empty() {
@@ -677,6 +688,7 @@ impl App {
     }
 
     /// A light with its name: green and bright when lit, dark when not. Clickable.
+    #[allow(dead_code)] // (the FM-1 / Mellotron lights: now "Hear the FM-1 too" in the Sound menu)
     fn led(ui: &mut egui::Ui, lit: bool, name: &str) -> egui::Response {
         let font = egui::TextStyle::Button.resolve(ui.style());
         let text_color = if lit { Color32::WHITE } else { Color32::from_gray(120) };
@@ -729,7 +741,7 @@ impl App {
         let list = self.sounds_list.lock().unwrap().clone();
         let note = self.sounds_note.lock().unwrap().clone();
         let mut remove: Option<String> = None;
-        egui::Window::new("Mellotron sounds").open(&mut open).collapsible(false).resizable(false)
+        egui::Window::new("Rich sounds").open(&mut open).collapsible(false).resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Heading);
                 ui.label("The two lights beside the Mellotron button show what you hear (FM-1, Mellotron): click one to switch it.");
@@ -776,11 +788,60 @@ impl App {
                         });
                     }
                 }
+                // Rich: GeneralUser GS, the closest instrument to the FM-1's sound (rich.rs)
+                ui.separator();
+                ui.label(egui::RichText::new("Rich").strong());
+                ui.label("A rich version of the FM-1's sound, out of this computer: the closest of 128 instruments to the sound the FM-1 plays (its flute, organ, strings, bells…), from GeneralUser GS by S. Christian Collins (free).");
+                ui.horizontal(|ui| {
+                    if rich::downloaded() {
+                        if ui.button("Remove Rich").clicked() {
+                            remove = Some(rich::ID.to_string());
+                        }
+                    } else if note.as_deref().is_some_and(|n| n.starts_with("Downloading")) {
+                        ui.label(format!("{} MB", rich::SIZE_MB));
+                    } else if ui.button(format!("Download Rich ({} MB)", rich::SIZE_MB)).clicked() {
+                        let (note, ready, ctx) = (self.sounds_note.clone(), self.sounds_ready.clone(), ctx.clone());
+                        *note.lock().unwrap() = Some("Downloading Rich (GeneralUser GS)…".into());
+                        std::thread::spawn(move || {
+                            match rich::download() {
+                                Ok(()) => {
+                                    *note.lock().unwrap() = Some("Rich is ready: the Mellotron button steps through it.".into());
+                                    *ready.lock().unwrap() = Some(rich::ID.to_string());
+                                }
+                                Err(e) => *note.lock().unwrap() = Some(format!("Rich couldn't be downloaded ({e}). Try again later.")),
+                            }
+                            ctx.request_repaint();
+                        });
+                    }
+                });
+                if rich::downloaded() {
+                    let pick = *rich::PICK.lock().unwrap();
+                    let auto = format!("Auto: {}", rich::GM[rich::program_for(&rich::FM1_SOUND.lock().unwrap()) as usize]);
+                    let shown = pick.map_or(auto.clone(), |p| rich::GM[p as usize].to_string());
+                    let mut new_pick = pick;
+                    egui::ComboBox::from_label("Instrument").selected_text(shown).height(400.0).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut new_pick, None, format!("{auto} (follows the FM-1's sound)"));
+                        for (i, n) in rich::GM.iter().enumerate() {
+                            ui.selectable_value(&mut new_pick, Some(i as u8), *n);
+                        }
+                    });
+                    if new_pick != pick {
+                        *rich::PICK.lock().unwrap() = new_pick;
+                        self.store();
+                    }
+                }
                 if let Some(n) = &note {
                     ui.add_space(8.0);
                     ui.label(n);
                 }
             });
+        if remove.as_deref() == Some(rich::ID) {
+            if self.mellotron_sound == rich::ID {
+                self.set_mellotron(String::new());
+            }
+            rich::remove();
+            remove = None;
+        }
         if let Some(id) = remove {
             if self.mellotron_sound == id {
                 self.set_mellotron(String::new());
@@ -1017,7 +1078,28 @@ impl App {
         labels.iter().map(|l| ui.painter().layout_no_wrap(l.to_string(), font.clone(), Color32::WHITE).size().x).fold(0.0, f32::max) + pad
     }
 
+    /// A new row when the next control (w wide) won't fit: horizontal_wrapped wraps text and plain buttons, but a menu
+    /// or a fixed-width button runs off the window's edge instead.
+    fn fit(ui: &mut egui::Ui, w: f32) {
+        let left = ui.clip_rect().right() - 14.0 - ui.cursor().min.x;   /* (to the window's edge, less the bar's margin) */
+        if left < w && ui.cursor().min.x > ui.clip_rect().left() + 15.0 {
+            ui.end_row();
+        }
+    }
+
+    /// A menu's width with its arrow, for fit().
+    fn combo_w(ui: &egui::Ui, w: f32) -> f32 {
+        w + ui.spacing().icon_width + ui.spacing().icon_spacing + ui.spacing().button_padding.x * 2.0 + 4.0
+    }
+
     fn buttons(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // the bar's text smaller than the app's: fewer rows, more room for the big screen
+        for (t, size) in [(egui::TextStyle::Button, 15.0), (egui::TextStyle::Body, 15.0)] {
+            if let Some(f) = ui.style_mut().text_styles.get_mut(&t) {
+                f.size = f.size.min(size);
+            }
+        }
+        ui.spacing_mut().button_padding.x = ui.spacing().button_padding.x.min(8.0);
         let h = ui.spacing().interact_size.y;
         ui.horizontal_wrapped(|ui| {
             let shown = match &self.keys {
@@ -1026,7 +1108,7 @@ impl App {
                 None => "Keys…".into(),
             };
             let (choice, channel) = (self.keys_choice.clone(), self.keys_channel);
-            egui::ComboBox::from_id_salt("keys").selected_text(shown).width(300.0).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("keys").selected_text(shown).width(200.0).show_ui(ui, |ui| {
                 ui.selectable_value(&mut self.keys_choice, String::new(), "Any keyboard plugged in");
                 for name in keys::sources() {
                     ui.selectable_value(&mut self.keys_choice, name.clone(), name);
@@ -1046,56 +1128,85 @@ impl App {
                 self.store();
             }
             let w = Self::width_for(ui, &["Hide mirror", "Show mirror"]);
+            Self::fit(ui, w);
             if ui.add_sized([w, h], egui::Button::new(if self.mirror_on { "Hide mirror" } else { "Show mirror" })).clicked() {
                 self.mirror_on = !self.mirror_on;
                 self.store();
             }
             let w = Self::width_for(ui, &["Smooth: on", "Smooth: off"]);
+            Self::fit(ui, w);
             if ui.add_sized([w, h], egui::SelectableLabel::new(self.smooth_on, if self.smooth_on { "Smooth: on" } else { "Smooth: off" })).clicked() {
                 self.toggle_smooth();
             }
-            let mel = if !self.mellotron_sound.is_empty() {
-                format!("Mellotron: {}", self.mellotron_sound)
-            } else if mellotron::installed().is_empty() {
-                "Mellotron: get sounds".to_string()
+            // One Sound menu (it replaces the Mellotron button, the lights, Sounds… and Sweeten): what you hear, in one click
+            let installed = mellotron::installed();
+            let name_of = |id: &str| if id == rich::ID { "Rich sounds".to_string() } else { format!("Mellotron {id}") };
+            let shown = if self.mellotron_sound.is_empty() {
+                "Sound: FM-1 only".to_string()
+            } else if self.mellotron_sound == rich::ID {
+                let p = rich::program();
+                format!("Sound: Rich · {}", rich::GM[p as usize])
             } else {
-                "Mellotron: off".to_string()
+                format!("Sound: Mellotron {}", self.mellotron_sound)
             };
-            let mut all: Vec<String> = mellotron::installed().iter().map(|s| format!("Mellotron: {s}")).collect();
-            all.extend(["Mellotron: get sounds".to_string(), "Mellotron: off".to_string()]);
-            let w = Self::width_for(ui, &all.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let r = ui.add_sized([w, h], egui::SelectableLabel::new(!self.mellotron_sound.is_empty(), mel))
-                .on_hover_text("A Mellotron the FM-1's keys play, out of this computer: click for the next sound (or off), right-click for Mellotron sounds to download");
-            if r.clicked() {
-                self.next_mellotron(ctx);
+            let mut choose: Option<String> = None;
+            let (mut hear_fm1, mut sweeten_now, mut more) = (self.fm1_with_mellotron, self.sweeten, false);
+            let mut new_pick = *rich::PICK.lock().unwrap();
+            let pick_before = new_pick;
+            let sw = Self::width_for(ui, &[shown.as_str()]);
+            Self::fit(ui, Self::combo_w(ui, sw));
+            egui::ComboBox::from_id_salt("sound").selected_text(shown).width(sw).height(560.0).show_ui(ui, |ui| {
+                if ui.selectable_label(self.mellotron_sound.is_empty(), "FM-1 only").clicked() {
+                    choose = Some(String::new());
+                }
+                for id in &installed {
+                    if ui.selectable_label(self.mellotron_sound == *id, name_of(id)).clicked() {
+                        choose = Some(id.clone());
+                    }
+                }
+                if installed.is_empty() {
+                    ui.label("No sounds yet: Get sounds… below");
+                }
+                ui.separator();
+                ui.add_enabled(!self.mellotron_sound.is_empty(), egui::Checkbox::new(&mut hear_fm1, "Hear the FM-1 too"))
+                    .on_hover_text("On: the FM-1's own sound as well as the rich one. Off: only the rich one");
+                ui.add_enabled(!self.mellotron_sound.is_empty(), egui::Checkbox::new(&mut sweeten_now, "Sweeten"))
+                    .on_hover_text("As a good stereo makes it: a little warmth and air, soft saturation, stereo width and a small room");
+                if self.mellotron_sound == rich::ID {
+                    ui.separator();
+                    ui.label("Rich's instrument:");
+                    let auto_p = rich::program_for(&rich::FM1_SOUND.lock().unwrap());
+                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                        ui.selectable_value(&mut new_pick, None, format!("Auto · {} (follows the FM-1)", rich::GM[auto_p as usize]));
+                        for (i, n) in rich::GM.iter().enumerate() {
+                            ui.selectable_value(&mut new_pick, Some(i as u8), *n);
+                        }
+                    });
+                }
+                ui.separator();
+                if ui.button("Get sounds…").clicked() {
+                    more = true;
+                }
+            }).response.on_hover_text("What you hear: the FM-1 alone, or a rich sound from this computer as you play it");
+            if let Some(id) = choose {
+                self.set_mellotron(id);
             }
-            if r.secondary_clicked() {
-                self.open_sounds(ctx);
-            }
-            // Two lights: which sounds you hear. Lit (green) = you hear it. Click one to switch it.
-            let mel_on = !self.mellotron_sound.is_empty();
-            let fm1_on = !FM1_DOWN.load(std::sync::atomic::Ordering::Relaxed);
-            // only with a Mellotron to hear: always in Max; in Basic once a sound has been downloaded
-            let have_sounds = !mellotron::installed().is_empty();
-            if have_sounds && Self::led(ui, fm1_on, "FM-1")
-                .on_hover_text(if mel_on { "Lit: you hear the FM-1 (its own sound, and a keyboard's notes) as well as the Mellotron. Click to switch: remembered." } else { "Lit: you hear the FM-1. While the Mellotron is on, click this to choose both sounds or only the Mellotron." })
-                .clicked() && mel_on {
-                self.fm1_with_mellotron = !self.fm1_with_mellotron;
+            if hear_fm1 != self.fm1_with_mellotron {
+                self.fm1_with_mellotron = hear_fm1;
                 self.apply_fm1_light();
                 self.store();
             }
-            if have_sounds && Self::led(ui, mel_on, "Mellotron").on_hover_text("Lit: you hear the Mellotron. Click to turn it on or off.").clicked() {
-                if mel_on { self.set_mellotron(String::new()) } else { self.next_mellotron(ctx) }
+            if sweeten_now != self.sweeten {
+                self.sweeten = sweeten_now;
+                sweeten::ON.store(self.sweeten, std::sync::atomic::Ordering::Relaxed);
+                self.store();
             }
-            if have_sounds {
-                let w = Self::width_for(ui, &["Sweeten: on", "Sweeten: off"]);
-                if ui.add_sized([w, h], egui::SelectableLabel::new(self.sweeten, if self.sweeten { "Sweeten: on" } else { "Sweeten: off" }))
-                    .on_hover_text("The Mellotron as a good stereo makes it: a little warmth and air, soft tape saturation, stereo width and a small room")
-                    .clicked() {
-                    self.sweeten = !self.sweeten;
-                    sweeten::ON.store(self.sweeten, std::sync::atomic::Ordering::Relaxed);
-                    self.store();
-                }
+            if new_pick != pick_before {
+                *rich::PICK.lock().unwrap() = new_pick;
+                self.store();
+            }
+            if more {
+                self.open_sounds(ctx);
             }
             if self.stale() && !self.knobs_on && !self.lights_on {
                 let b = egui::Button::new(egui::RichText::new("Get Knobs and Lights ›").strong().color(Color32::BLACK)).fill(Color32::from_rgb(255, 210, 31));
@@ -1128,7 +1239,8 @@ impl App {
                 self.store();
             }
             let before = self.look;
-            egui::ComboBox::from_id_salt("look").selected_text(self.look.name()).width(260.0).show_ui(ui, |ui| {
+            Self::fit(ui, Self::combo_w(ui, 120.0));
+            egui::ComboBox::from_id_salt("look").selected_text(self.look.name()).width(120.0).show_ui(ui, |ui| {
                 for l in Look::ALL {
                     ui.selectable_value(&mut self.look, l, l.name());
                 }
@@ -1138,6 +1250,7 @@ impl App {
                 self.store();
             }
             let w = Self::width_for(ui, &["Leave full screen", "Full screen"]);
+            Self::fit(ui, w);
             if ui.add_sized([w, h], egui::Button::new(if self.full_screen { "Leave full screen" } else { "Full screen" })).clicked() {
                 self.full_screen = !self.full_screen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.full_screen));
@@ -1171,7 +1284,8 @@ impl App {
                 None => "FM-1: not found".into(),
             };
             // (a fixed width: "FM-1: not found" and a firmware's name take the same room)
-            ui.add_sized([230.0, h], egui::Label::new(egui::RichText::new(status).color(Color32::GRAY)).truncate());
+            Self::fit(ui, 170.0);
+            ui.add_sized([170.0, h], egui::Label::new(egui::RichText::new(status).color(Color32::GRAY)).truncate());
             // The sound playing, standing out: big, bold, in gold on a dark chip.
             // the sound playing, in a box of its own size (a long name is cut short, not the row reflowed); its room
             // kept while there's none
@@ -1179,14 +1293,15 @@ impl App {
             {
                 let sound = sound.unwrap_or_default();
                 let empty = sound.is_empty();
+                Self::fit(ui, 284.0);
                 egui::Frame::new()
                     .fill(if empty { Color32::TRANSPARENT } else { Color32::from_rgb(0x2a, 0x22, 0x0a) })
                     .stroke(if empty { egui::Stroke::NONE } else { egui::Stroke::new(1.5_f32, Color32::from_rgb(0xf2, 0xc0, 0x4c)) })
                     .corner_radius(8.0)
                     .inner_margin(egui::Margin::symmetric(10, 3))
                     .show(ui, |ui| {
-                        ui.set_width(300.0);
-                        ui.add_visible(!empty, egui::Label::new(egui::RichText::new(format!("\u{266a} {sound}")).size(20.0).strong().color(Color32::from_rgb(0xf2, 0xc0, 0x4c))).truncate());
+                        ui.set_width(260.0);
+                        ui.add_visible(!empty, egui::Label::new(egui::RichText::new(format!("\u{266a} {sound}")).size(17.0).strong().color(Color32::from_rgb(0xf2, 0xc0, 0x4c))).truncate());
                     });
             }
         });
@@ -1261,6 +1376,7 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                 }
                 if let Some(name) = screen::sound(m) {
                     if s.sound.as_deref() != Some(name.as_str()) {
+                        *rich::FM1_SOUND.lock().unwrap() = name.clone();   // Rich "Auto" follows it
                         s.sound = (!name.is_empty()).then_some(name);
                         ctx.request_repaint();
                     }
