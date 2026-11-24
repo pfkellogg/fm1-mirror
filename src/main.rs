@@ -1092,6 +1092,39 @@ impl App {
         w + ui.spacing().icon_width + ui.spacing().icon_spacing + ui.spacing().button_padding.x * 2.0 + 4.0
     }
 
+    /// A click: the button pressed now and let go TAP later, on a timer of its own (not waiting for a frame).
+    fn tap(&self, id: u8) {
+        let Some(l) = &self.link else { return };
+        self.send_press(id, true);
+        let out = l.out.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(knobs::TAP);
+            if fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+                let mut panel = fm1base::PANEL.lock().unwrap();
+                panel.press(id, false);
+                if let Some(f) = panel.next() {
+                    let _ = out.lock().unwrap().send(&f);
+                }
+            } else {
+                let _ = out.lock().unwrap().send(&knobs::press(id, false));
+            }
+        });
+    }
+
+    /// Presses (or lets go of) an FM-1 button or key, the way the Lights strip does.
+    fn send_press(&self, id: u8, down: bool) {
+        let Some(l) = &self.link else { return };
+        if fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+            let mut panel = fm1base::PANEL.lock().unwrap();
+            panel.press(id, down);
+            if let Some(f) = panel.next() {
+                let _ = l.out.lock().unwrap().send(&f);
+            }
+        } else {
+            let _ = l.out.lock().unwrap().send(&knobs::press(id, down));
+        }
+    }
+
     fn buttons(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // the bar's text smaller than the app's: fewer rows, more room for the big screen
         for (t, size) in [(egui::TextStyle::Button, 15.0), (egui::TextStyle::Body, 15.0)] {
@@ -1738,6 +1771,21 @@ impl eframe::App for App {
                 let in_here = self.glass_on && !self.glass_float;
                 if self.mirror_on {
                     p.image(tex.id(), fit(area), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                    // B3 ORGAN's switches, clickable on the big screen (PERC, 3RD, FAST, SOFT, LES, OD, KEYS, vibrato)
+                    let b3 = self.shared.lock().unwrap().sound.as_deref().is_some_and(|n| n.starts_with("B3 ORGAN"));
+                    if b3 {
+                        let r = fit(area);
+                        let resp = ui.interact(r, ui.id().with("screen_switches"), egui::Sense::click());
+                        let at = |pos: Pos2| knobs::b3_hotspot((pos.x - r.left()) / r.width() * 240.0, (pos.y - r.top()) / r.height() * 240.0);
+                        if resp.hover_pos().is_some_and(|q| at(q).is_some()) {
+                            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if resp.clicked() {
+                            if let Some(id) = resp.interact_pointer_pos().and_then(at) {
+                                self.tap(id);
+                            }
+                        }
+                    }
                 } else if !in_here {
                     p.text(area.center() - vec2(0.0, 50.0), Align2::CENTER_CENTER, "The mirror is hidden", FontId::proportional(24.0), Color32::GRAY);
                 }

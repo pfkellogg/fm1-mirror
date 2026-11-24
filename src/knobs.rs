@@ -150,8 +150,41 @@ pub fn played_keys(notes: &[u8]) -> u32 {
 /// them is being played (the FM-1's own keys, or a keyboard through Keys). `seen`: Key Lights have come.
 /// `held`: the buttons and keys the pointer holds down now (bit id); `press` gets each change (id, down), so a click
 /// or a hold on the strip presses the real one.
+/// B3 ORGAN's switches on its own screen (240 x 240; rows 18 apart from y 142, as its band_ctrl draws them): the
+/// FM-1 button that switches each (B3's rules), so a click on "PERC ON" on the big screen does what ENV does.
+pub fn b3_hotspot(x: f32, y: f32) -> Option<u8> {
+    if !(142.0..196.0).contains(&y) || !(0.0..240.0).contains(&x) {
+        return None;
+    }
+    match ((y - 142.0) / 18.0) as u32 {
+        0 => (61.0..113.0).contains(&x).then_some(2), // UP ON / OFF: vibrato (FX)
+        1 => Some(if x < 69.0 { 4 } else if x < 96.0 { 10 } else if x < 137.0 { 11 } else if x < 176.0 { 12 } else { return None }), // PERC: ENV, 3RD: ARP, FAST: SEQ, SOFT: PLAY
+        2 => Some(if x < 72.0 { 5 } else if x < 120.0 { 3 } else if x < 212.0 { 13 } else { return None }), // LES: LFO, OD: SEL, KEYS: REC
+        _ => None,
+    }
+}
+
+/// A quick click: held down for TAP (the button, or the app, was too quick for a frame to see it down)
+pub const TAP: std::time::Duration = std::time::Duration::from_millis(250);
+static TAPS: std::sync::Mutex<Vec<(u8, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+
 pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool, held: &mut u64, press: &mut dyn FnMut(u8, bool)) {
     let mut now_held = 0u64;
+    let now = std::time::Instant::now();
+    let mut taps = TAPS.lock().unwrap();
+    taps.retain(|&(_, until)| until > now);
+    for &(id, _) in taps.iter() {
+        now_held |= 1 << id;
+    }
+    // down while the pointer holds it, or for TAP after a click whose press and release fell in one frame
+    let mut hit = |r: egui::Response, id: u8, now_held: &mut u64| {
+        if r.is_pointer_button_down_on() {
+            *now_held |= 1 << id;
+        } else if r.clicked() && *held >> id & 1 == 0 && *now_held >> id & 1 == 0 {
+            *now_held |= 1 << id;
+            taps.push((id, now + TAP));
+        }
+    };
     let (keys, btns) = (l.keys, l.btns);
     let area = ui.available_rect_before_wrap();
     let p = ui.painter();
@@ -164,9 +197,7 @@ pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool, held: &m
     let bw = area.width() / BUTTON_ROW.len() as f32;
     for (j, &id) in BUTTON_ROW.iter().enumerate() {
         let r = Rect::from_min_size(Pos2::new(area.left() + bw * j as f32, area.top()), vec2(bw, bh)).shrink(3.0);
-        if ui.interact(r, ui.id().with(("btn", id)), Sense::click_and_drag()).is_pointer_button_down_on() {
-            now_held |= 1 << id;
-        }
+        hit(ui.interact(r, ui.id().with(("btn", id)), Sense::click_and_drag()), id as u8, &mut now_held);
         let on = btns >> id & 1 == 1 || now_held >> id & 1 == 1;
         let dim = l.glow_btns >> id & 1 == 1;
         p.rect_filled(r, 6.0, if on { glow } else if dim { soft_btn } else { Color32::from_gray(45) });
@@ -194,14 +225,12 @@ pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool, held: &m
     let pointer = ui.input(|inp| inp.pointer.interact_pos());
     let on_black = pointer.is_some_and(|pt| black.iter().any(|&(_, i)| black_rect(i).contains(pt)));
     for &(k, i) in &black {
-        if ui.interact(black_rect(i), ui.id().with(("key", k)), Sense::click_and_drag()).is_pointer_button_down_on() {
-            now_held |= 1 << (14 + k);
-        }
+        hit(ui.interact(black_rect(i), ui.id().with(("key", k)), Sense::click_and_drag()), 14 + k as u8, &mut now_held);
     }
     for &(k, i) in &white {
         let r = Rect::from_min_size(Pos2::new(area.left() + ww * i as f32, top), vec2(ww, kh)).shrink2(vec2(1.5, 0.0));
-        if !on_black && ui.interact(r, ui.id().with(("key", k)), Sense::click_and_drag()).is_pointer_button_down_on() {
-            now_held |= 1 << (14 + k);
+        if !on_black {
+            hit(ui.interact(r, ui.id().with(("key", k)), Sense::click_and_drag()), 14 + k as u8, &mut now_held);
         }
         let p = ui.painter();
         let on = keys >> k & 1 == 1 || now_held >> (14 + k) & 1 == 1;
@@ -231,6 +260,9 @@ pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool, held: &m
         }
     }
     *held = now_held;
+    if !taps.is_empty() {
+        ui.ctx().request_repaint_after(TAP); // (to let a tap go)
+    }
     ui.advance_cursor_after_rect(Rect::from_min_max(area.min, Pos2::new(area.right(), top + kh)));
 }
 
