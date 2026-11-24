@@ -15,6 +15,7 @@ mod glass;
 mod glyphs;
 mod install;
 mod keys;
+mod knobs;
 mod mellotron;
 mod scope;
 mod screen;
@@ -207,6 +208,8 @@ struct Shared {
     sound: Option<String>,
     /// Big Screen version 2 (konsumer's): the frame being put together, shown whole.
     v2: bigscreen2::Viewer,
+    /// Key Lights: the FM-1's lit keys and buttons, when its firmware sends them (knobs.rs).
+    lights: Option<knobs::Lights>,
 }
 
 /// The FM-1's MIDI ports (USB or Bluetooth), open both ways.
@@ -282,6 +285,11 @@ fn hellos(
             let _ = output.lock().unwrap().send(&ASK_INFO);
         }
         if base.load(Ordering::Relaxed) {
+            // Big Knobs' turns still waiting for the last answer (fm1base.rs Remote)
+            let next = fm1base::PANEL.lock().unwrap().next();
+            if let Some(f) = next {
+                let _ = output.lock().unwrap().send(&f);
+            }
             if base_at.elapsed() >= Duration::from_secs(2) {
                 base_at = Instant::now();
                 let _ = output.lock().unwrap().send(&fm1base::request(1));
@@ -368,6 +376,10 @@ struct App {
     fm1_with_mellotron: bool,
     /// Sweeten the Mellotron (warmth and air, saturation, stereo chorus, a small room): remembered.
     sweeten: bool,
+    /// Big Knobs (the FM-1's eight knobs, big) and Key Lights (its lit keys and buttons, big): remembered.
+    knobs_on: bool,
+    lights_on: bool,
+    knobs: knobs::Knobs,
     /// The buttons' height when last shown: kept while they're hidden, so nothing moves.
     bar_h: f32,
     /// Where the main window is (its top left, in points), kept so it opens there next time (the same screen).
@@ -458,6 +470,9 @@ impl App {
             keys_changed: false,
             glass: glass::Glass::default(),
             glass_on: saved["spyglass"].as_bool().unwrap_or(true),
+            knobs_on: saved["knobs"].as_bool().unwrap_or(false),
+            lights_on: saved["lights"].as_bool().unwrap_or(false),
+            knobs: knobs::Knobs::default(),
             glass_at: saved["spyglass_x"].as_f64().zip(saved["spyglass_y"].as_f64()).map(|(x, y)| (x as f32, y as f32)),
             glass_size: saved["spyglass_size"].as_f64().map(|d| d as f32),
             mirror_on: saved["mirror"].as_bool().unwrap_or(true),
@@ -488,7 +503,7 @@ impl App {
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on });
         if let Some(at) = self.main_at {
             s["window_x"] = json!(at.x);
             s["window_y"] = json!(at.y);
@@ -1037,6 +1052,18 @@ impl App {
                     self.store();
                 }
             }
+            if ui.selectable_label(self.knobs_on, "Knobs")
+                .on_hover_text("Big Knobs: the FM-1's eight knobs, big. Drag or scroll one to turn the real one (Big Screen firmware from aikellogg.com)")
+                .clicked() {
+                self.knobs_on = !self.knobs_on;
+                self.store();
+            }
+            if ui.selectable_label(self.lights_on, "Lights")
+                .on_hover_text("Key Lights: the FM-1's keys and buttons, big, lit when they're lit on the FM-1 (where your fingers hide them)")
+                .clicked() {
+                self.lights_on = !self.lights_on;
+                self.store();
+            }
             if ui.selectable_label(self.glass_on, "Spyglass").clicked() {
                 self.glass_on = !self.glass_on;
                 self.store();
@@ -1134,6 +1161,9 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
     let out_port = output.ports().into_iter().find(|p| output.port_name(p).is_ok_and(|n| n == name))?;
     let output = Arc::new(Mutex::new(output.connect(&out_port, "FM-1 Big Screen out").ok()?));
     let mut parser = keys::Parser::default();
+    fm1base::ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed); // a new link: which mirror it speaks, found again
+    shared.lock().unwrap().lights = None; // and its lights: the last firmware's are not this one's
+    *fm1base::PANEL.lock().unwrap() = fm1base::Remote::default();
     let base: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let base_in = base.clone();
     let v2_answers: Arc<std::sync::atomic::AtomicU32> = Arc::default();
@@ -1168,6 +1198,12 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                     s.firmware = Some(info);
                     ctx.request_repaint();
                 }
+                if let Some(l) = knobs::lights(m) {
+                    if s.lights != Some(l) {
+                        s.lights = Some(l);
+                        ctx.request_repaint();
+                    }
+                }
                 if let Some(name) = screen::sound(m) {
                     if s.sound.as_deref() != Some(name.as_str()) {
                         s.sound = (!name.is_empty()).then_some(name);
@@ -1196,7 +1232,17 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                 }
                 // Charles Vestal's mirror (fm1-base firmware): its answer, and its rectangles and fills.
                 match fm1base::apply(&mut s.screen, m) {
-                    fm1base::Got::Hello => base_in.store(true, std::sync::atomic::Ordering::Relaxed),
+                    fm1base::Got::Hello => {
+                        base_in.store(true, std::sync::atomic::Ordering::Relaxed);
+                        fm1base::ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    fm1base::Got::Lights(l) => {
+                        if s.lights != Some(l) {
+                            s.lights = Some(l);
+                            ctx.request_repaint();
+                        }
+                    }
+                    fm1base::Got::Answered => fm1base::PANEL.lock().unwrap().answered(),
                     fm1base::Got::Painted => {
                         s.last = Some(Instant::now());
                         s.changed = true;
@@ -1440,6 +1486,37 @@ impl eframe::App for App {
             // hidden, but its room kept (dark): the FM-1's screen never changes size when the buttons come and go
             egui::TopBottomPanel::bottom("buttons").exact_height(self.bar_h).show_separator_line(false)
                 .frame(egui::Frame::new().fill(Color32::BLACK)).show(ctx, |_| {});
+        }
+        if self.knobs_on && !showing_help {
+            let out = self.link.as_ref().map(|l| l.out.clone());
+            let knobs = &mut self.knobs;
+            egui::TopBottomPanel::bottom("knobs").exact_height(130.0).show_separator_line(false)
+                .frame(egui::Frame::new().fill(Color32::from_gray(18)).inner_margin(egui::Margin::same(6)))
+                .show(ctx, |ui| knobs::knobs_ui(ui, knobs, &mut |m| {
+                    let Some(o) = &out else { return };
+                    if fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+                        // Charles Vestal's fm1-base mirror: its own remote, one command at a time (fm1base.rs)
+                        let mut panel = fm1base::PANEL.lock().unwrap();
+                        match m.get(4) {
+                            Some(4) => panel.turn(m[5], if m[6] >= 64 { m[6] as i32 - 128 } else { m[6] as i32 }),
+                            Some(6) => panel.master(m[5] as u16 | (m[6] as u16) << 7),
+                            _ => {}
+                        }
+                        if let Some(f) = panel.next() {
+                            let _ = o.lock().unwrap().send(&f);
+                        }
+                    } else {
+                        let _ = o.lock().unwrap().send(m);
+                    }
+                }));
+        }
+        if self.lights_on && !showing_help {
+            let played = self.played.lock().unwrap().keys_down();
+            let got = self.shared.lock().unwrap().lights;
+            let (l, seen) = (got.unwrap_or_default(), got.is_some());
+            egui::TopBottomPanel::bottom("lights").exact_height(150.0).show_separator_line(false)
+                .frame(egui::Frame::new().fill(Color32::from_gray(12)).inner_margin(egui::Margin::same(6)))
+                .show(ctx, |ui| knobs::lights_ui(ui, l, knobs::played_keys(&played), seen));
         }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::BLACK)).show(ctx, |ui| {
             let area = ui.max_rect();

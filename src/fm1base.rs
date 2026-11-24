@@ -13,12 +13,25 @@
 //!   10iiiiii          the colour now = cache[i]; one pixel of it
 //!   11nnnnnn hi lo    the colour now = hi << 8 | lo, kept in cache[hash(colour)]; n + 1 pixels of it
 //! with hash(c) = (c * 40503) >> 10 & 63.
+//!
+//! Big Knobs and Key Lights speak its panel messages, also from device/mirror.c:
+//! - 0x53 input, from the FM-1 while it mirrors: buttons held u16, keys held u32, the encoders' detents (7 x int8),
+//!   MASTER u16, the lit buttons u16 (bit 15: PLAY lit red), the lit keys u32, then (version 4) the dim buttons u16
+//!   and the dim keys u32 (little-endian). Buttons by its B_* (FX SEL ENV LFO EDIT GLO HOME SAVE ARP SEQ PLAY REC
+//!   OCT- OCT+), keys bit k = key k (F3 = 0);
+//! - 0x54 remote, to it: seq, op, a, b, c (op 3 a turn: a = EN_* (SELECT ALGO PRESET K1..K4), b = detents, int8;
+//!   op 4 MASTER: a | b << 8 = 0..4096). One at a time: it answers 0x54 (seq, op, 1 done / 0 refused), then the next.
 
 use crate::screen::{Screen, SIZE};
 
 pub const REQUEST: u8 = 0x50;
 const RECT: u8 = 0x51;
 const FILL: u8 = 0x52;
+const INPUT: u8 = 0x53;
+const REMOTE: u8 = 0x54;
+
+/// Its mirror answered on this link: Big Knobs speak its remote (set by the input, cleared on a new link).
+pub static ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Asks for the screen: 2 on with the whole screen again, 1 keep on, 0 off.
 pub fn request(what: u8) -> Vec<u8> {
@@ -34,6 +47,81 @@ pub enum Got {
     Hello,
     /// Part of the screen, painted.
     Painted,
+    /// Its panel's lights (Key Lights).
+    Lights(crate::knobs::Lights),
+    /// A remote command was answered: the next may go.
+    Answered,
+}
+
+/// Its B_* order, as our button ids (knobs.rs BUTTONS: OCT- OCT+ FX SEL ENV LFO EDIT GLO HOME SAVE ARP SEQ PLAY REC).
+fn our_buttons(b: u16) -> u16 {
+    let mut m = 0;
+    for i in 0..14 {
+        if b >> i & 1 == 1 {
+            m |= 1 << if i < 12 { i + 2 } else { i - 12 };
+        }
+    }
+    if b >> 15 & 1 == 1 {
+        m |= 1 << 12; // PLAY lit red: lit
+    }
+    m
+}
+
+fn lights(body: &[u8]) -> Option<crate::knobs::Lights> {
+    if body.len() < 21 {
+        return None;
+    }
+    let u16_at = |i: usize| body[i] as u16 | (body[i + 1] as u16) << 8;
+    let u32_at = |i: usize| u32::from_le_bytes([body[i], body[i + 1], body[i + 2], body[i + 3]]) & ((1 << 27) - 1);
+    let mut l = crate::knobs::Lights { btns: our_buttons(u16_at(15)), keys: u32_at(17), ..Default::default() };
+    if body.len() >= 27 {
+        l.glow_btns = our_buttons(u16_at(21)) & !l.btns;
+        l.glow_keys = u32_at(23) & !l.keys;
+    }
+    Some(l)
+}
+
+/// Big Knobs through its remote: turns gathered per knob while one command is on its way, MASTER the latest.
+#[derive(Default)]
+pub struct Remote {
+    seq: u8,
+    waiting: Option<std::time::Instant>,
+    turns: [i32; 7],
+    master: Option<u16>,
+}
+
+pub static PANEL: std::sync::Mutex<Remote> = std::sync::Mutex::new(Remote { seq: 0, waiting: None, turns: [0; 7], master: None });
+
+impl Remote {
+    /// One of our knobs (knobs.rs: 0 SELECT, 1 ALGORITHM, 2..5 KNOB 1..4, 6 PRESETS) turned `n` clicks.
+    pub fn turn(&mut self, ours: u8, n: i32) {
+        let en = [0usize, 1, 3, 4, 5, 6, 2][(ours as usize).min(6)];
+        self.turns[en] = (self.turns[en] + n).clamp(-127, 127);
+    }
+    /// MASTER to `v` of 1023.
+    pub fn master(&mut self, v: u16) {
+        self.master = Some((v.min(1023) as u32 * 4096 / 1023) as u16);
+    }
+    pub fn answered(&mut self) {
+        self.waiting = None;
+    }
+    /// The next command to send, if there is one and none is on its way (or its answer was lost: 300 ms).
+    pub fn next(&mut self) -> Option<Vec<u8>> {
+        if self.waiting.is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(300)) {
+            return None;
+        }
+        let body = if let Some(e) = self.turns.iter().position(|&t| t != 0) {
+            let n = std::mem::take(&mut self.turns[e]);
+            [3, e as u8, n as i8 as u8, 0]
+        } else if let Some(v) = self.master.take() {
+            [4, (v & 255) as u8, (v >> 8) as u8, 0]
+        } else {
+            return None;
+        };
+        self.seq = self.seq.wrapping_add(1);
+        self.waiting = Some(std::time::Instant::now());
+        Some(crate::install::frame(REMOTE, &[self.seq, body[0], body[1], body[2], body[3]]))
+    }
 }
 
 /// One message from the FM-1, into the screen.
@@ -41,6 +129,8 @@ pub fn apply(screen: &mut Screen, m: &[u8]) -> Got {
     let Some((command, body)) = parse(m) else { return Got::Nothing };
     match command {
         REQUEST => Got::Hello,
+        INPUT => lights(&body).map_or(Got::Nothing, Got::Lights),
+        REMOTE => Got::Answered,
         RECT if rect(screen, &body) => Got::Painted,
         FILL if fill(screen, &body) => Got::Painted,
         _ => Got::Nothing,
@@ -145,6 +235,32 @@ fn fill(screen: &mut Screen, b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_messages() {
+        // B_HOME (6) lit, B_OCTUP (13) dim, PLAY red; key 0 lit, key 26 dim
+        let mut b = vec![0u8; 27];
+        b[15] = 1 << 6;
+        b[16] = 0x80;
+        b[17] = 1;
+        b[22] = 1 << 5;
+        b[26] = 1 << 2;
+        let l = lights(&b).unwrap();
+        assert_eq!(l.btns, 1 << 8 | 1 << 12);
+        assert_eq!(l.keys, 1);
+        assert_eq!(l.glow_btns, 1 << 1);
+        assert_eq!(l.glow_keys, 1 << 26);
+        let mut r = Remote::default();
+        r.turn(6, -2); // PRESETS: its EN_PRESET (2)
+        r.turn(2, 1); // KNOB 1: EN_K1 (3)
+        assert!(r.next().is_some());
+        assert!(r.next().is_none(), "one at a time");
+        r.answered();
+        assert!(r.next().is_some());
+        r.answered();
+        assert!(r.next().is_none());
+        assert_eq!((r.turns, r.seq), ([0; 7], 2));
+    }
 
     /// A device frame, as the firmware builds one.
     fn device(command: u8, body: &[u8]) -> Vec<u8> {
