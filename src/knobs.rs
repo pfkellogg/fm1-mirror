@@ -223,11 +223,7 @@ pub fn lights_ui(ui: &mut egui::Ui, l: Lights, played: u32, seen: bool, held: &m
             p.rect_stroke(r.shrink(1.5), 3.0, Stroke::new(3.0_f32, Color32::from_rgb(40, 110, 230)), egui::StrokeKind::Inside);
         }
     }
-    if !seen && played == 0 {
-        p.text(Pos2::new(area.center().x, top + kh * 0.8), Align2::CENTER_CENTER,
-            "No lights from this firmware yet: Key Lights need a Big Screen build from aikellogg.com",
-            FontId::proportional(14.0), Color32::from_gray(90));
-    }
+    let _ = seen; // (an FM-1 without lights: the app says so in the strip's place, main.rs stale)
     for id in 0..41u8 {
         let (was, is) = (*held >> id & 1 == 1, now_held >> id & 1 == 1);
         if was != is {

@@ -210,6 +210,9 @@ struct Shared {
     v2: bigscreen2::Viewer,
     /// Key Lights: the FM-1's lit keys and buttons, when its firmware sends them (knobs.rs).
     lights: Option<knobs::Lights>,
+    /// When this link's screen first came: a screen with no Key Lights a few seconds later is the older, screen-only
+    /// Big Screen (stale: its new version has Big Knobs and Key Lights).
+    screen_since: Option<Instant>,
 }
 
 /// The FM-1's MIDI ports (USB or Bluetooth), open both ways.
@@ -416,6 +419,10 @@ enum Need {
     Bluetooth,
 }
 
+/// A screen without Key Lights this long after it came: the older, screen-only Big Screen.
+const STALE_AFTER: Duration = Duration::from_secs(5);
+/// aikellogg.com's Make a Big Screen: any FM-1 firmware from The Firmware Hub, with Big Screen, Big Knobs and Key Lights.
+const MAKE_BIG_SCREEN: &str = "https://aikellogg.com/#/make-big-screen";
 const WORKBENCH: &str = "https://open.m-vave.com/fm1-workbench";
 
 fn open_url(url: &str) {
@@ -797,6 +804,16 @@ impl App {
     }
 
     /// Why there's no picture, if there isn't one.
+    /// The FM-1's firmware has the older Big Screen: its screen came a while ago, but no Key Lights (Charles Vestal's
+    /// mirror sends its lights its own way: never stale).
+    fn stale(&self) -> bool {
+        if self.link.is_none() || fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        let s = self.shared.lock().unwrap();
+        s.lights.is_none() && s.screen_since.is_some_and(|t| t.elapsed() > STALE_AFTER)
+    }
+
     fn need(&self) -> Option<Need> {
         let (last, identity, firmware) = {
             let s = self.shared.lock().unwrap();
@@ -830,6 +847,18 @@ impl App {
         };
         let heading = |ui: &mut egui::Ui, t: &str| {
             ui.label(egui::RichText::new(t).size(34.0).strong().color(Color32::WHITE));
+        };
+        // Any firmware without Big Screen: the big way to one (aikellogg.com's Make a Big Screen: any Firmware Hub
+        // firmware, made Big Screen with Big Knobs and Key Lights)
+        let make_big = |ui: &mut egui::Ui| {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new("You need to install a Big Screen firmware of your choice.").size(30.0).strong().color(Color32::from_rgb(255, 210, 31)));
+            let b = egui::Button::new(egui::RichText::new("Choose one at aikellogg.com  ›").size(30.0).strong().color(Color32::BLACK))
+                .fill(Color32::from_rgb(255, 210, 31)).min_size(vec2(460.0, 64.0));
+            if ui.add(b).on_hover_text("aikellogg.com › Make a Big Screen: pick any FM-1 firmware from The Firmware Hub and download it with Big Screen, Big Knobs and Key Lights").clicked() {
+                open_url(MAKE_BIG_SCREEN);
+            }
+            ui.add_space(10.0);
         };
         let step1 = |ui: &mut egui::Ui| {
             body(ui, "Step 1 · On M-VAVE's FM1 Workbench page (in Chrome or Edge), put M-VAVE's free Official Open firmware on it: Device update › Recovery & force update › tick \"Force flash\" › Connect device › tick \"I have backed up…\" › Force flash. It replaces the FM-1's sounds with M-VAVE's: if you made your own, save them first on the page's Projects & sounds tab.");
@@ -870,7 +899,15 @@ impl App {
             }
             match need {
                 Need::Plug => {
-                    heading(ui, "No FM-1 yet");
+                    ui.horizontal_wrapped(|ui| {
+                        heading(ui, "No FM-1 yet");
+                        ui.add_space(24.0);
+                        let b = egui::Button::new(egui::RichText::new("Get a Big Screen firmware at aikellogg.com  ›").size(26.0).strong().color(Color32::BLACK))
+                            .fill(Color32::from_rgb(255, 210, 31)).min_size(vec2(520.0, 60.0));
+                        if ui.add(b).clicked() {
+                            open_url(MAKE_BIG_SCREEN);
+                        }
+                    });
                     body(ui, "Plug it into this computer with its USB cable and turn it on.");
                     #[cfg(target_os = "macos")]
                     {
@@ -883,11 +920,13 @@ impl App {
                 Need::Connecting => heading(ui, "Connecting to the FM-1…"),
                 Need::Original => {
                     heading(ui, "This FM-1 has M-VAVE's original firmware");
+                    make_big(ui);
                     body(ui, "To show its screen here it needs the FM-1 Big Screen firmware: M-VAVE's free Official Open firmware plus one small addition that sends the screen to this app. Two steps, and you can go back to the original whenever you like.");
                     step1(ui);
                 }
                 Need::Open => {
                     heading(ui, "This FM-1 runs M-VAVE's Open firmware");
+                    make_big(ui);
                     body(ui, "Install the Big Screen version of it: the same firmware, plus sending its screen to this app. It takes about 2 minutes.");
                     if self.confirming {
                         body(ui, "Ready? Keep the FM-1 plugged in and on until it's done, and close other apps that use it (on Windows only one app can use it at a time). If you made your own sounds or projects, saving them first on M-VAVE's page is always a good idea.");
@@ -913,6 +952,7 @@ impl App {
                 }
                 Need::Community(c) => {
                     heading(ui, &format!("This FM-1 runs {}", c.name));
+                    make_big(ui);
                     body(ui, &format!("It's fine to keep using it. But the regular {} doesn't send its screen, so it can't show here: FM-1 Big Screen needs the Big Screen version of the firmware on the FM-1.", c.name));
                     if c.released {
                         body(ui, &format!("Install {}: the same {}, plus sending its screen to this app. Its page has the download and how to install it. Then plug the FM-1 in again and open this app.", c.build, c.name));
@@ -934,6 +974,7 @@ impl App {
                 }
                 Need::Other(id) => {
                     heading(ui, "This FM-1 runs another firmware");
+                    make_big(ui);
                     body(ui, &format!("It says it is \"{id}\". It's fine to keep using it, and nothing needs changing. This firmware doesn't send its screen, so it can't show here."));
                     body(ui, "Only if you want to see the screen here: Big Screen replaces this firmware, and it installs over M-VAVE's Official Open firmware, so that comes first.");
                     step1(ui);
@@ -944,6 +985,7 @@ impl App {
                 }
                 Need::Unknown(name) => {
                     heading(ui, "No screen from the FM-1 yet");
+                    make_big(ui);
                     body(ui, &format!("Connected to \"{name}\", but it isn't sending its screen and didn't say which firmware it runs. If you're using a community firmware, it's fine to keep it, and nothing needs changing: it just can't show here."));
                     body(ui, "Only if you want to see the screen here, or if this FM-1 has M-VAVE's original firmware:");
                     step1(ui);
@@ -1053,6 +1095,12 @@ impl App {
                     self.sweeten = !self.sweeten;
                     sweeten::ON.store(self.sweeten, std::sync::atomic::Ordering::Relaxed);
                     self.store();
+                }
+            }
+            if self.stale() && !self.knobs_on && !self.lights_on {
+                let b = egui::Button::new(egui::RichText::new("Get Knobs and Lights ›").strong().color(Color32::BLACK)).fill(Color32::from_rgb(255, 210, 31));
+                if ui.add(b).on_hover_text("This firmware has the older Big Screen (the screen only). Its new version, with Big Knobs and Key Lights, is at aikellogg.com").clicked() {
+                    open_url(MAKE_BIG_SCREEN);
                 }
             }
             if ui.selectable_label(self.knobs_on, "Knobs")
@@ -1165,7 +1213,11 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
     let output = Arc::new(Mutex::new(output.connect(&out_port, "FM-1 Big Screen out").ok()?));
     let mut parser = keys::Parser::default();
     fm1base::ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed); // a new link: which mirror it speaks, found again
-    shared.lock().unwrap().lights = None; // and its lights: the last firmware's are not this one's
+    {
+        let mut s = shared.lock().unwrap();
+        s.lights = None; // and its lights: the last firmware's are not this one's
+        s.screen_since = None;
+    }
     *fm1base::PANEL.lock().unwrap() = fm1base::Remote::default();
     let base: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let base_in = base.clone();
@@ -1222,6 +1274,7 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                     bigscreen2::Got::Frame => {
                         let s = &mut *s;
                         s.v2.show(&mut s.screen.pixels);
+                        s.screen_since.get_or_insert_with(Instant::now);
                         s.last = Some(Instant::now());
                         s.changed = true;
                         ctx.request_repaint();
@@ -1229,6 +1282,7 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                     bigscreen2::Got::Nothing => {}
                 }
                 if s.screen.apply(m) {
+                    s.screen_since.get_or_insert_with(Instant::now);
                     s.last = Some(Instant::now());
                     s.changed = true;
                     ctx.request_repaint();
@@ -1490,7 +1544,27 @@ impl eframe::App for App {
             egui::TopBottomPanel::bottom("buttons").exact_height(self.bar_h).show_separator_line(false)
                 .frame(egui::Frame::new().fill(Color32::BLACK)).show(ctx, |_| {});
         }
-        if self.knobs_on && !showing_help {
+        let stale = self.stale();
+        if !stale && self.shared.lock().unwrap().lights.is_none() && self.link.is_some() {
+            ctx.request_repaint_after(Duration::from_secs(1)); // (to notice a stale Big Screen in time)
+        }
+        if stale && (self.knobs_on || self.lights_on) && !showing_help {
+            // the older Big Screen: no knobs or lights to show, the way to them instead (the screen keeps its size)
+            egui::TopBottomPanel::bottom("stale").show_separator_line(false)
+                .frame(egui::Frame::new().fill(Color32::from_gray(18)).inner_margin(egui::Margin::same(12)))
+                .show(ctx, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new("This firmware has the older Big Screen: the screen only. For Big Knobs and Key Lights, install its new version.")
+                            .size(22.0).strong().color(Color32::from_rgb(255, 210, 31)));
+                        let b = egui::Button::new(egui::RichText::new("Get it at aikellogg.com  ›").size(24.0).strong().color(Color32::BLACK))
+                            .fill(Color32::from_rgb(255, 210, 31)).min_size(vec2(320.0, 48.0));
+                        if ui.add(b).clicked() {
+                            open_url(MAKE_BIG_SCREEN);
+                        }
+                    });
+                });
+        }
+        if self.knobs_on && !showing_help && !stale {
             let out = self.link.as_ref().map(|l| l.out.clone());
             let knobs = &mut self.knobs;
             egui::TopBottomPanel::bottom("knobs").exact_height(130.0).show_separator_line(false)
@@ -1513,7 +1587,7 @@ impl eframe::App for App {
                     }
                 }));
         }
-        if self.lights_on && !showing_help {
+        if self.lights_on && !showing_help && !stale {
             let played = self.played.lock().unwrap().keys_down();
             let out = self.link.as_ref().map(|l| l.out.clone());
             let held = &mut self.panel_held;
