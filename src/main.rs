@@ -916,7 +916,21 @@ impl App {
             return false;
         }
         let s = self.shared.lock().unwrap();
-        s.lights.is_none() && s.screen_since.is_some_and(|t| t.elapsed() > STALE_AFTER)
+        // only a firmware that said what it is: our older builds always do; one whose author added the screen himself
+        // and that doesn't answer (SHRUB) isn't "the older Big Screen" (nothing newer of it to get)
+        let known = s.identity.is_some() || s.firmware.is_some();
+        known && s.lights.is_none() && s.screen_since.is_some_and(|t| t.elapsed() > STALE_AFTER)
+    }
+
+    /// A screen sent by a firmware whose author added it himself, with no Knobs or Lights (SHRUB): it doesn't say what it
+    /// is and sends no lights. Its Knobs and Lights would do nothing, so they don't show (the screen keeps its size).
+    fn author_screen(&self) -> bool {
+        if self.link.is_none() || fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        let s = self.shared.lock().unwrap();
+        let known = s.identity.is_some() || s.firmware.is_some();
+        !known && s.lights.is_none() && s.screen_since.is_some_and(|t| t.elapsed() > STALE_AFTER)
     }
 
     fn need(&self) -> Option<Need> {
@@ -1741,6 +1755,7 @@ impl eframe::App for App {
                 .frame(egui::Frame::new().fill(Color32::BLACK)).show(ctx, |_| {});
         }
         let stale = self.stale();
+        let author_screen = self.author_screen();
         if !stale && self.shared.lock().unwrap().lights.is_none() && self.link.is_some() {
             ctx.request_repaint_after(Duration::from_secs(1)); // (to notice a stale Big Screen in time)
         }
@@ -1760,7 +1775,7 @@ impl eframe::App for App {
                     });
                 });
         }
-        if self.knobs_on && !showing_help && !stale {
+        if self.knobs_on && !showing_help && !stale && !author_screen {
             let out = self.link.as_ref().map(|l| l.out.clone());
             let knobs = &mut self.knobs;
             egui::TopBottomPanel::bottom("knobs").exact_height(130.0).show_separator_line(false)
@@ -1783,7 +1798,7 @@ impl eframe::App for App {
                     }
                 }));
         }
-        if self.lights_on && !showing_help && !stale {
+        if self.lights_on && !showing_help && !stale && !author_screen {
             let played = self.played.lock().unwrap().keys_down();
             let out = self.link.as_ref().map(|l| l.out.clone());
             let held = &mut self.panel_held;
