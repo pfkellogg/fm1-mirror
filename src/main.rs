@@ -378,6 +378,12 @@ struct App {
     /// The FM-1 light while the Mellotron is on: lit = you hear the FM-1 too (both sounds), dark = only the Mellotron.
     /// Remembered between sessions, like the Mellotron's (its sound).
     fm1_with_mellotron: bool,
+    /// The firmware the FM-1 ran last time ("FM-1_480103|ERIK37 ..."): a different one (a flash) turns the app's sound
+    /// off, so you hear the new firmware itself first; remembered. Checked once per link, when it has said what it is.
+    last_firmware: String,
+    firmware_checked: bool,
+    /// When a new firmware turned the sound off: the Sound menu says so for a while.
+    new_firmware_at: Option<Instant>,
     /// Sweeten the Mellotron (warmth and air, saturation, stereo chorus, a small room): remembered.
     sweeten: bool,
     /// Big Knobs (the FM-1's eight knobs, big) and Key Lights (its lit keys and buttons, big): remembered.
@@ -500,6 +506,9 @@ impl App {
             mellotron: None,
             mellotron_sound: saved["mellotron"].as_str().filter(|s| mellotron::installed().iter().any(|i| i == s)).unwrap_or("").to_string(),
             fm1_with_mellotron: saved["fm1_with_mellotron"].as_bool().unwrap_or(true),
+            last_firmware: saved["last_firmware"].as_str().unwrap_or("").to_string(),
+            firmware_checked: false,
+            new_firmware_at: None,
             sweeten: {
                 let on = saved["sweeten"].as_bool().unwrap_or(false);
                 sweeten::ON.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -523,7 +532,7 @@ impl App {
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap() });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap(), "last_firmware": self.last_firmware });
         if let Some(at) = self.main_at {
             s["window_x"] = json!(at.x);
             s["window_y"] = json!(at.y);
@@ -584,10 +593,12 @@ impl App {
                     s.firmware = None;
                     s.sound = None;
                 }
+                self.firmware_checked = false;
                 self.link = open(self.shared.clone(), self.played.clone(), ctx.clone());
             }
             *self.keys_out.lock().unwrap() = self.link.as_ref().map(|l| l.out.clone());
             self.keep_keys(ctx);
+            self.check_new_firmware();
             if self.glass_on && self.listener.as_ref().is_none_or(|l| l.dead()) {
                 self.listener = scope::open(self.sound_in.clone());
             } else if !self.glass_on {
@@ -710,6 +721,33 @@ impl App {
         }
         p.galley(egui::pos2(c.x + d / 2.0 + 6.0, rect.center().y - galley.size().y / 2.0), galley, text_color);
         resp
+    }
+
+    /// After a flash: a different firmware than last time turns the app's sound off (it would play over the new
+    /// firmware's own sound, and may not suit it). Decided 5 s after its screen first came, once it has said what it is.
+    fn check_new_firmware(&mut self) {
+        if self.firmware_checked || self.link.is_none() {
+            return;
+        }
+        let (since, identity, firmware) = {
+            let s = self.shared.lock().unwrap();
+            (s.screen_since, s.identity.clone(), s.firmware.clone())
+        };
+        if !since.is_some_and(|t| t.elapsed() > Duration::from_secs(5)) || (identity.is_none() && firmware.is_none()) {
+            return;
+        }
+        self.firmware_checked = true;
+        let now = format!("{}|{}", identity.unwrap_or_default(), firmware.unwrap_or_default());
+        if now == self.last_firmware {
+            return;
+        }
+        if !self.last_firmware.is_empty() && !self.mellotron_sound.is_empty() {
+            eprintln!("new firmware ({} -> {now}): the app's sound off", self.last_firmware);
+            self.set_mellotron(String::new());
+            self.new_firmware_at = Some(Instant::now());
+        }
+        self.last_firmware = now;
+        self.store();
     }
 
     fn start_mellotron(&mut self) {
@@ -1174,7 +1212,9 @@ impl App {
             // One Sound menu (it replaces the Mellotron button, the lights, Sounds… and Sweeten): what you hear, in one click
             let installed = mellotron::installed();
             let name_of = |id: &str| if id == rich::ID { "Rich sounds".to_string() } else { format!("Mellotron {id}") };
-            let shown = if self.mellotron_sound.is_empty() {
+            let shown = if self.mellotron_sound.is_empty() && self.new_firmware_at.is_some_and(|t| t.elapsed() < Duration::from_secs(15)) {
+                "New firmware: Sound FM-1 only".to_string()   // (a flash turned the app's sound off: on again here)
+            } else if self.mellotron_sound.is_empty() {
                 "Sound: FM-1 only".to_string()
             } else if self.mellotron_sound == rich::ID {
                 let p = rich::program();
