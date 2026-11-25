@@ -38,6 +38,9 @@ use serde_json::{json, Value};
 use screen::{Screen, ASK_INFO, SIZE};
 
 const APP_NAME: &str = "FM-1 Big Screen";
+/// Firmwares whose authors built Big Screen in themselves (no Key Lights to send, nothing newer of ours to get): never
+/// "the older Big Screen". SHRUB (Steve Duda, Xfer Records).
+const OWN_BIG_SCREEN: [&str; 1] = ["FM-1_901"];
 /// Settings stay in the folder named for the app's old name, FM-1 Mirror, so nothing is lost.
 pub(crate) const SETTINGS_DIR: &str = "FM-1 Mirror";
 /// How long the buttons stay after the mouse last moved.
@@ -919,18 +922,8 @@ impl App {
         // only a firmware that said what it is: our older builds always do; one whose author added the screen himself
         // and that doesn't answer (SHRUB) isn't "the older Big Screen" (nothing newer of it to get)
         let known = s.identity.is_some() || s.firmware.is_some();
-        known && s.lights.is_none() && s.screen_since.is_some_and(|t| t.elapsed() > STALE_AFTER)
-    }
-
-    /// A screen sent by a firmware whose author added it himself, with no Knobs or Lights (SHRUB): it doesn't say what it
-    /// is and sends no lights. Its Knobs and Lights would do nothing, so they don't show (the screen keeps its size).
-    fn author_screen(&self) -> bool {
-        if self.link.is_none() || fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
-            return false;
-        }
-        let s = self.shared.lock().unwrap();
-        let known = s.identity.is_some() || s.firmware.is_some();
-        !known && s.lights.is_none() && s.screen_since.is_some_and(|t| t.elapsed() > STALE_AFTER)
+        let own = s.identity.as_deref().is_some_and(|id| OWN_BIG_SCREEN.iter().any(|o| id.starts_with(o)));
+        known && !own && s.lights.is_none() && s.screen_since.is_some_and(|t| t.elapsed() > STALE_AFTER)
     }
 
     fn need(&self) -> Option<Need> {
@@ -1755,7 +1748,6 @@ impl eframe::App for App {
                 .frame(egui::Frame::new().fill(Color32::BLACK)).show(ctx, |_| {});
         }
         let stale = self.stale();
-        let author_screen = self.author_screen();
         if !stale && self.shared.lock().unwrap().lights.is_none() && self.link.is_some() {
             ctx.request_repaint_after(Duration::from_secs(1)); // (to notice a stale Big Screen in time)
         }
@@ -1775,7 +1767,7 @@ impl eframe::App for App {
                     });
                 });
         }
-        if self.knobs_on && !showing_help && !stale && !author_screen {
+        if self.knobs_on && !showing_help && !stale {
             let out = self.link.as_ref().map(|l| l.out.clone());
             let knobs = &mut self.knobs;
             egui::TopBottomPanel::bottom("knobs").exact_height(130.0).show_separator_line(false)
@@ -1798,7 +1790,7 @@ impl eframe::App for App {
                     }
                 }));
         }
-        if self.lights_on && !showing_help && !stale && !author_screen {
+        if self.lights_on && !showing_help && !stale {
             let played = self.played.lock().unwrap().keys_down();
             let out = self.link.as_ref().map(|l| l.out.clone());
             let held = &mut self.panel_held;

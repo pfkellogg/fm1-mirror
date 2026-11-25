@@ -239,6 +239,8 @@ The seventh: **[NACHTFAHRT + FM-1 Big Screen](https://github.com/pfkellogg/fm1-n
 
 **Click the firmware's own switches** (from 1.3.27): on B3 ORGAN (fm1-dock), the switches on its screen are clickable on the big screen: **PERC** (and 3RD, FAST, SOFT), **LES**, **OD**, **KEYS** and the vibrato (**UP ON**). The pointer turns into a hand over them, and a click presses the FM-1 button that switches it (PERC is ENV, OD is SEL, and so on). Quick clicks on the Lights strip's buttons and keys always count now too: before 1.3.27 a click shorter than one frame could be lost.
 
+**SHRUB's knobs and buttons** (from 1.3.30): SHRUB now takes the app's Big Knobs and button presses too (Steve Duda's newest SHRUB), so Knobs and Lights show for it again; it's named as a firmware with its own Big Screen, so the "older Big Screen" note never shows for it.
+
 **SHRUB on the big screen** (from 1.3.29): Steve Duda (Xfer Records) added FM-1 Big Screen to SHRUB himself, in its own way: its screen shows big, full size. A firmware whose author added the screen like this, and that doesn't take the app's knobs and buttons, gets no "older Big Screen" note and no Knobs or Lights rows that would do nothing. Also: a missed frame from an fm1-base firmware asks for the whole screen again, so nothing stays wrong.
 
 **After a flash, you hear the new firmware first** (from 1.3.28): when a different firmware connects than last time, the app's own sound (Rich or a Mellotron) turns off, so it never plays over the new firmware's sound, and the Sound menu says "New firmware: Sound FM-1 only" for a few seconds. Turn it back on in the Sound menu. The same firmware again changes nothing.
