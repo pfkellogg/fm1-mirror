@@ -33,6 +33,19 @@ const REMOTE: u8 = 0x54;
 /// Its mirror answered on this link: Big Knobs speak its remote (set by the input, cleared on a new link).
 pub static ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The last rect / fill's seq (256: none yet), and a frame found missing (a gap in seq): the screen is asked for
+/// again (as fm1-base's own viewer does), so nothing a lost frame carried stays wrong (h1's full-screen animation).
+pub static LAST_SEQ: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(256);
+pub static MISSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn seen(seq: u8) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let last = LAST_SEQ.swap(seq as u16, Relaxed);
+    if last < 256 && seq != (last as u8).wrapping_add(1) {
+        MISSED.store(true, Relaxed);
+    }
+}
+
 /// Asks for the screen: 2 on with the whole screen again, 1 keep on, 0 off.
 pub fn request(what: u8) -> Vec<u8> {
     crate::install::frame(REQUEST, &[what])
@@ -145,8 +158,10 @@ pub fn apply(screen: &mut Screen, m: &[u8]) -> Got {
         REQUEST => Got::Hello,
         INPUT => lights(&body).map_or(Got::Nothing, Got::Lights),
         REMOTE => Got::Answered,
-        RECT if rect(screen, &body) => Got::Painted,
-        FILL if fill(screen, &body) => Got::Painted,
+        RECT | FILL if body.len() >= 5 => {
+            seen(body[4]);
+            if (command == RECT && rect(screen, &body)) || (command == FILL && fill(screen, &body)) { Got::Painted } else { Got::Nothing }
+        }
         _ => Got::Nothing,
     }
 }

@@ -252,7 +252,7 @@ fn hellos(
     use std::sync::atomic::Ordering;
     const BASE_ASK_AT: [u64; 3] = [1000, 5000, 6000]; // ms after opening: clear of the questions at 2, 3 and 4 s
     let opened = Instant::now();
-    let (mut base_asked, mut base_at) = (0usize, Instant::now());
+    let (mut base_asked, mut base_at, mut missed_at) = (0usize, Instant::now(), Instant::now());
     let (mut asked_identity, mut asked_build, mut asked_info) = (false, false, false);
     let mut hello_at: Option<Instant> = None;
     // Big Screen version 2 first (konsumer's: whole frames, less to send); version 1 if the firmware doesn't answer.
@@ -294,7 +294,13 @@ fn hellos(
             if let Some(f) = next {
                 let _ = output.lock().unwrap().send(&f);
             }
-            if base_at.elapsed() >= Duration::from_secs(2) {
+            if fm1base::MISSED.load(Ordering::Relaxed) && missed_at.elapsed() >= Duration::from_millis(700) {
+                // a frame went missing on the way: the whole screen again (what the viewer has is skipped)
+                fm1base::MISSED.store(false, Ordering::Relaxed);
+                missed_at = Instant::now();
+                base_at = Instant::now();
+                let _ = output.lock().unwrap().send(&fm1base::request(2));
+            } else if base_at.elapsed() >= Duration::from_secs(2) {
                 base_at = Instant::now();
                 let _ = output.lock().unwrap().send(&fm1base::request(1));
             }
@@ -1401,6 +1407,7 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
     let output = Arc::new(Mutex::new(output.connect(&out_port, "FM-1 Big Screen out").ok()?));
     let mut parser = keys::Parser::default();
     fm1base::ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed); // a new link: which mirror it speaks, found again
+    fm1base::LAST_SEQ.store(256, std::sync::atomic::Ordering::Relaxed);
     {
         let mut s = shared.lock().unwrap();
         s.lights = None; // and its lights: the last firmware's are not this one's

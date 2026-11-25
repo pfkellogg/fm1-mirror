@@ -277,6 +277,31 @@ On a newer FM-1:
 
 Not yet tested by us on a newer FM-1 (2026-11-08).
 
+## For firmware authors: the best-practice guide
+
+**[Fix your firmware](https://aikellogg.com/#/fix-your-firmware)** on aikellogg.com has the best-practice guide for FM-1
+Big Screen, and a free form: send us your firmware's repository and we check its Big Screen part and send you the fix
+(a pull request or a patch). The short version, learnt making h1 by Jake Handy show big
+([video: Best Practice Guide for FM-1 Big Screen](https://youtu.be/En7lYeFrhkk)):
+
+1. **Know the budget:** USB MIDI carries about 85 KB a second to a computer, whatever the firmware: about three and a
+   half full screens of pixels.
+2. **Send only what changed,** in full-width rows where you can.
+3. **Never drop: wait for the link** while the big screen is connected (a dropped piece is never sent again by a
+   firmware that redraws only what changes).
+4. **Keep your picture** and let the mirror ask for a row of it (`APP_MIRROR_ROW`), or at least redraw when asked
+   (fm1-base's `APP_REDRAW`).
+5. **Draw so it packs small:** flat colours and long runs.
+6. **Light the keys and read the knobs through the platform:** Key Lights and Big Knobs then just work.
+7. **Leave a little room;** never shrink the mirror's buffers to fit.
+8. **Test with the app** on your busiest screen, and count what was dropped: it should stay at zero.
+
+Every FM-1 firmware with a Big Screen build is on [Big Screen FWs](https://aikellogg.com/#/bigscreen-fws); every night
+at midnight the builds follow The Firmware Hub's new and updated firmwares.
+
+In the next release the app also asks fm1-base's mirror for the whole screen again when a frame goes missing on the way (a gap
+in its frame numbers).
+
 ## For the curious
 
 - `src/keys.rs`: Keys (the keyboard passed on to the FM-1) and what's been played; `src/glass.rs`:
