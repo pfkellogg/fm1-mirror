@@ -5,12 +5,22 @@ from PIL import Image, ImageDraw, ImageFont
 N = sys.argv[1] if len(sys.argv) > 1 else "2"
 NAME = f"FM-1 Sim {N}"
 F = ImageFont.truetype("/System/Library/Fonts/Avenir Next.ttc", 34, index=0)
+F2 = ImageFont.truetype("/System/Library/Fonts/Avenir Next.ttc", 22, index=0)
+KNOBS = [0] * 8          # the app's Big Knob turns it got (04 <knob> <delta>), shown on its screen
+GOT = [0.0]
 def frame(t):
     im = Image.new("RGB", (240, 240), (10, 30, 70)); d = ImageDraw.Draw(im)
     d.text((14, 20), f"FM-1 SIM {N}", font=F, fill=(255, 210, 31))
-    d.text((14, 80), "test unit", font=F, fill=(255, 255, 255))
+    d.text((14, 66), "pretend FM-1", font=F2, fill=(255, 255, 255))
+    names = ["SELECT", "ALGO", "KNOB 1", "KNOB 2", "KNOB 3", "KNOB 4", "PRESETS", "MASTER"]
+    for i in (2, 3, 4, 5):
+        y = 100 + (i - 2) * 26
+        d.text((14, y), f"{names[i]}", font=F2, fill=(200, 200, 210))
+        v = KNOBS[i]
+        col = (60, 220, 90) if time.time() - GOT[0] < 1.5 else (255, 255, 255)
+        d.text((150, y), f"{v:+d}", font=F2, fill=col)
     x = int(t * 60) % 200
-    d.rectangle([x, 170, x + 40, 210], fill=(60, 220, 90))
+    d.rectangle([x, 212, x + 30, 232], fill=(60, 220, 90))
     return im
 def rows(im, only=None):
     px = im.load(); out = []
@@ -32,19 +42,26 @@ def cb(msg, _):
         last_hello[0] = time.time()
         if m[4] == 1: asked.set()
         if m[4] >= 2: print("got", " ".join(f"{b:02x}" for b in m[:12]), flush=True)   # a knob or a button (the lock)
+        if m[4] == 4 and len(m) >= 7:
+            k, n = m[5], m[6]
+            if k < 8:
+                KNOBS[k] += n - 128 if n >= 64 else n
+                GOT[0] = time.time(); asked.set()
     elif m and m[0] == 0xf0:
         print("got", " ".join(f"{b:02x}" for b in m[:12]), flush=True)   # a knob, a button (to check the lock)
 mi.set_callback(cb)
 print("ready", NAME, flush=True)
 t0 = time.time(); prev = None
 while True:
-    if time.time() - last_hello[0] < 3:          # like the FM-1: sends while it's asked
+    if time.time() - last_hello[0] < 3:          # like the FM-1: sends while it's asked, only the rows that changed
         im = frame(time.time() - t0)
         if prev is None or asked.is_set():
             asked.clear(); send = rows(im)
         else:
-            send = rows(im, only=range(165, 215))
-        for m in send: mo.send_message(m); time.sleep(0.0005)
+            a, b = prev.tobytes(), im.tobytes()
+            changed = [y for y in range(240) if a[y * 720:(y + 1) * 720] != b[y * 720:(y + 1) * 720]]
+            send = rows(im, only=set(changed))
+        for m in send: mo.send_message(m); time.sleep(0.002)
         prev = im
     else:
         prev = None
