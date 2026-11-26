@@ -300,16 +300,33 @@ pub fn download(p: &Pack) -> Result<(), String> {
     if !p.sha256.is_empty() && !p.sha256.eq_ignore_ascii_case(&format!("{:x}", sha2::Sha256::digest(&zip))) {
         return Err("the download was damaged".into());
     }
+    let n = install_zip(&p.id, zip, None)?;
+    if n < 35 {
+        return Err(format!("the sound was incomplete ({n} of 35 strips)"));
+    }
+    Ok(())
+}
+
+/// A sound's zip into place: its 35 strips (043.flac .. 077.flac), from the zip's top or from the folder `folder`
+/// inside it (the all-in-one download has a folder for each sound). Returns how many strips; under 35, nothing changes.
+fn install_zip(id: &str, zip: Vec<u8>, folder: Option<&str>) -> Result<usize, String> {
     let dir = sounds_dir().ok_or("no folder for sounds")?;
-    let part = dir.join(format!("{}.part", p.id));
+    let part = dir.join(format!("{id}.part"));
     let _ = std::fs::remove_dir_all(&part);
     std::fs::create_dir_all(&part).map_err(|e| e.to_string())?;
     let mut a = zip::ZipArchive::new(std::io::Cursor::new(zip)).map_err(|e| e.to_string())?;
     let mut n = 0;
     for i in 0..a.len() {
         let mut f = a.by_index(i).map_err(|e| e.to_string())?;
+        let path = std::path::Path::new(f.name()).to_path_buf();
+        if let Some(want) = folder {      // only that sound's folder
+            let first = path.components().next().and_then(|c| c.as_os_str().to_str()).unwrap_or("");
+            if first != want {
+                continue;
+            }
+        }
         // just the strips: no folders, no paths
-        let name = std::path::Path::new(f.name()).file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
         let strip = name.len() == 8 && name.ends_with(".flac") && name[..3].chars().all(|c| c.is_ascii_digit());
         if f.is_dir() || !strip {
             continue;
@@ -320,12 +337,103 @@ pub fn download(p: &Pack) -> Result<(), String> {
     }
     if n < 35 {
         let _ = std::fs::remove_dir_all(&part);
-        return Err(format!("the sound was incomplete ({n} of 35 strips)"));
+        return Ok(n);
     }
-    let dest = dir.join(&p.id);
+    let dest = dir.join(id);
+    // keep the note of the files already taken from the Downloads folder (import_downloads): or each would come again
+    if let Ok(from) = std::fs::read(dest.join(".from")) {
+        let _ = std::fs::write(part.join(".from"), from);
+    }
     let _ = std::fs::remove_dir_all(&dest);
     std::fs::rename(&part, &dest).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(n)
+}
+
+/// A sound's name as people read it: "shakuhachi" -> "Shakuhachi".
+pub fn pretty(id: &str) -> String {
+    let mut c = id.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default().replace(['-', '_'], " ")
+}
+
+/// Sounds downloaded with a web browser, found in this computer's Downloads folder and put in place by themselves:
+/// a sound's own zip (mellotron-<id>.zip, mellotron-<id>-v2.zip …), the all-in-one download
+/// (fm1-big-screen-sounds*.zip: a folder for each sound, and rich/GeneralUser-GS.sf2), or GeneralUser-GS.sf2 itself.
+/// Each file is taken once (a note of it is kept beside the sound), and again only if it changes. Returns the sounds
+/// added, by name.
+pub fn import_downloads() -> Vec<String> {
+    let (Some(dl), Some(dir)) = (dirs::download_dir(), sounds_dir()) else { return Vec::new() };
+    let _ = std::fs::create_dir_all(&dir);
+    let Ok(rd) = std::fs::read_dir(&dl) else { return Vec::new() };
+    let mut added = Vec::new();
+    let ok_id = |id: &str| !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    for e in rd.flatten() {
+        let path = e.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()) else { continue };
+        let Ok(meta) = e.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let stamp = format!("{name} {} {:?}", meta.len(), meta.modified().ok());
+        let seen = |id: &str| std::fs::read_to_string(dir.join(id).join(".from")).is_ok_and(|s| s.lines().any(|l| l == stamp));
+        let note = |id: &str| {
+            let p = dir.join(id).join(".from");
+            let mut s = std::fs::read_to_string(&p).unwrap_or_default();
+            s.push_str(&stamp);
+            s.push('\n');
+            let _ = std::fs::write(p, s);
+        };
+        let lower = name.to_lowercase();
+        if lower.starts_with("mellotron-") && lower.ends_with(".zip") {
+            // mellotron-shakuhachi.zip, mellotron-flute-v7.zip, mellotron-flute (1).zip: the id is the first word
+            let id: String = lower["mellotron-".len()..].chars().take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit()).collect();
+            if !ok_id(&id) || seen(&id) || meta.len() > (200 << 20) {
+                continue;
+            }
+            if let Ok(zip) = std::fs::read(&path) {
+                if matches!(install_zip(&id, zip, None), Ok(n) if n >= 35) {
+                    note(&id);
+                    added.push(pretty(&id));
+                }
+            }
+        } else if lower.starts_with("fm1-big-screen-sounds") && lower.ends_with(".zip") && meta.len() < (600 << 20) {
+            let Ok(zip) = std::fs::read(&path) else { continue };
+            let folders: Vec<String> = match zip::ZipArchive::new(std::io::Cursor::new(&zip)) {
+                Ok(mut a) => {
+                    let mut f: Vec<String> = (0..a.len())
+                        .filter_map(|i| a.by_index(i).ok().and_then(|z| z.name().split('/').next().map(|s| s.to_string())))
+                        .collect();
+                    f.sort();
+                    f.dedup();
+                    f
+                }
+                Err(_) => continue,
+            };
+            for id in folders {
+                if id == crate::rich::ID {
+                    if !crate::rich::downloaded() || !seen(&id) {
+                        if crate::rich::install_from_zip(&zip).is_ok() {
+                            note(&id);
+                            added.push("Rich".into());
+                        }
+                    }
+                } else if ok_id(&id) && !seen(&id) {
+                    if matches!(install_zip(&id, zip.clone(), Some(&id)), Ok(n) if n >= 35) {
+                        note(&id);
+                        added.push(pretty(&id));
+                    }
+                }
+            }
+        } else if lower.starts_with("generaluser-gs") && lower.ends_with(".sf2") && !seen(crate::rich::ID) {
+            if crate::rich::install_file(&path).is_ok() {
+                note(crate::rich::ID);
+                added.push("Rich".into());
+            }
+        }
+    }
+    added.dedup();
+    added.sort();
+    added.dedup();
+    added
 }
 
 pub fn remove(id: &str) {
@@ -708,5 +816,33 @@ mod tests {
         e.mix(&mut out, 48000.0);
         let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(peak > 0.05 && peak < 0.95, "peak {peak}");
+    }
+}
+
+#[cfg(test)]
+mod import_tests {
+    /// Set FM1_IMPORT_TEST to a folder holding fm1-big-screen-sounds.zip and mellotron-flugelhorn.zip: they go into a
+    /// throwaway home's Downloads, and import_downloads must put every sound in place once (and nothing the second time).
+    #[test]
+    fn finds_downloads() {
+        let Ok(src) = std::env::var("FM1_IMPORT_TEST") else { return };
+        let home = std::env::temp_dir().join(format!("fm1home{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("Downloads")).unwrap();
+        for f in ["fm1-big-screen-sounds.zip", "mellotron-flugelhorn.zip"] {
+            std::fs::copy(std::path::Path::new(&src).join(f), home.join("Downloads").join(f)).unwrap();
+        }
+        std::env::set_var("HOME", &home);
+        let first = super::import_downloads();
+        eprintln!("first: {first:?}");
+        for id in ["flute", "strings", "choir", "shakuhachi", "flugelhorn"] {
+            assert!(super::downloaded(id), "{id} not installed");
+        }
+        assert!(crate::rich::downloaded(), "rich not installed");
+        let second = super::import_downloads();
+        eprintln!("second: {second:?}");
+        assert!(second.is_empty());
+        eprintln!("installed: {:?}", super::installed());
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

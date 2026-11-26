@@ -410,6 +410,8 @@ struct App {
     sounds_list: Arc<Mutex<Option<Result<Vec<mellotron::Pack>, String>>>>,
     sounds_note: Arc<Mutex<Option<String>>>,
     sounds_ready: Arc<Mutex<Option<String>>>,
+    /// Sounds found in the Downloads folder and put in place by themselves (mellotron::import_downloads).
+    sounds_found: Arc<Mutex<Option<Vec<String>>>>,
     /// The spyglass floats in a window of its own, outside this one.
     glass_float: bool,
     float: Arc<Mutex<Float>>,
@@ -529,6 +531,15 @@ impl App {
             sounds_list: Arc::default(),
             sounds_note: Arc::default(),
             sounds_ready: Arc::default(),
+            sounds_found: {
+                let found: Arc<Mutex<Option<Vec<String>>>> = Arc::default();
+                let f = found.clone();
+                std::thread::spawn(move || {
+                    let added = mellotron::import_downloads();
+                    *f.lock().unwrap() = Some(added);
+                });
+                found
+            },
             glass_float: saved["spyglass_float"].as_bool().unwrap_or(false),
             float: Arc::new(Mutex::new(Float { glass: glass::Glass::default(), size: float_size, at: float_at, close: false, dirty: false })),
             float_open: (float_size, float_at),
@@ -769,14 +780,27 @@ impl App {
     fn open_sounds(&mut self, ctx: &egui::Context) {
         self.sounds_open = true;
         *self.sounds_list.lock().unwrap() = None;
-        let (list, ctx) = (self.sounds_list.clone(), ctx.clone());
+        let (list, note, ctx) = (self.sounds_list.clone(), self.sounds_note.clone(), ctx.clone());
         std::thread::spawn(move || {
+            let added = mellotron::import_downloads();
+            if !added.is_empty() {
+                *note.lock().unwrap() = Some(format!("Found in your Downloads and added: {}. They're in the Sound menu.", added.join(", ")));
+            }
             *list.lock().unwrap() = Some(mellotron::list());
             ctx.request_repaint();
         });
     }
 
     fn sounds_window(&mut self, ctx: &egui::Context) {
+        let found = self.sounds_found.lock().unwrap().take();
+        if let Some(added) = found {
+            if !added.is_empty() {
+                self.open_sounds(ctx);
+                *self.sounds_note.lock().unwrap() = Some(format!("Found in your Downloads and added: {}. They're in the Sound menu.", added.join(", ")));
+            } else {
+                *self.sounds_found.lock().unwrap() = None;
+            }
+        }
         let ready = self.sounds_ready.lock().unwrap().take();
         if let Some(id) = ready {
             self.set_mellotron(id);            // a sound just downloaded: play it straight away
@@ -805,6 +829,36 @@ impl App {
                         }
                     }
                     Some(Ok(packs)) => {
+                        let missing: Vec<mellotron::Pack> = packs.iter().filter(|p| !mellotron::bundled(&p.id) && !mellotron::downloaded(&p.id)).cloned().collect();
+                        let busy = note.as_deref().is_some_and(|n| n.starts_with("Downloading"));
+                        if (!missing.is_empty() || !rich::downloaded()) && !busy {
+                            let mb = missing.iter().map(|p| p.bytes).sum::<u64>() as f64 / 1048576.0 + if rich::downloaded() { 0.0 } else { rich::SIZE_MB as f64 };
+                            if ui.button(format!("Get all ({mb:.0} MB)")).on_hover_text("Every sound you don't have yet, one after another").clicked() {
+                                let (note, ready, ctx) = (self.sounds_note.clone(), self.sounds_ready.clone(), ctx.clone());
+                                std::thread::spawn(move || {
+                                    let mut got = Vec::new();
+                                    for p in &missing {
+                                        *note.lock().unwrap() = Some(format!("Downloading {}…", p.name));
+                                        ctx.request_repaint();
+                                        if mellotron::download(p).is_ok() {
+                                            got.push(p.name.clone());
+                                        }
+                                    }
+                                    if !rich::downloaded() {
+                                        *note.lock().unwrap() = Some("Downloading Rich (GeneralUser GS)…".into());
+                                        ctx.request_repaint();
+                                        if rich::download().is_ok() {
+                                            got.push("Rich".into());
+                                        }
+                                    }
+                                    *note.lock().unwrap() = Some(if got.is_empty() { "Nothing could be downloaded now. Try again later.".into() } else { format!("Ready: {}. They're in the Sound menu.", got.join(", ")) });
+                                    if let Some(p) = missing.first() {
+                                        *ready.lock().unwrap() = Some(p.id.clone());
+                                    }
+                                    ctx.request_repaint();
+                                });
+                            }
+                        }
                         egui::Grid::new("sounds").spacing(vec2(24.0, 12.0)).show(ui, |ui| {
                             for p in packs {
                                 ui.label(&p.name);
@@ -1224,7 +1278,7 @@ impl App {
             }
             // One Sound menu (it replaces the Mellotron button, the lights, Sounds… and Sweeten): what you hear, in one click
             let installed = mellotron::installed();
-            let name_of = |id: &str| if id == rich::ID { "Rich sounds".to_string() } else { format!("Mellotron {id}") };
+            let name_of = |id: &str| if id == rich::ID { "Rich sounds".to_string() } else { format!("Mellotron {}", mellotron::pretty(id)) };
             let shown = if self.mellotron_sound.is_empty() && self.new_firmware_at.is_some_and(|t| t.elapsed() < Duration::from_secs(15)) {
                 "New firmware: Sound FM-1 only".to_string()   // (a flash turned the app's sound off: on again here)
             } else if self.mellotron_sound.is_empty() {
@@ -1233,7 +1287,7 @@ impl App {
                 let p = rich::program();
                 format!("Sound: Rich · {}", rich::GM[p as usize])
             } else {
-                format!("Sound: Mellotron {}", self.mellotron_sound)
+                format!("Sound: Mellotron {}", mellotron::pretty(&self.mellotron_sound))
             };
             let mut choose: Option<String> = None;
             let (mut hear_fm1, mut sweeten_now, mut more) = (self.fm1_with_mellotron, self.sweeten, false);

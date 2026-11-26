@@ -7,7 +7,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub const ID: &str = "rich";
-pub const URL: &str = "https://github.com/mrbumpy409/GeneralUser-GS/raw/main/GeneralUser-GS.sf2";
+pub const URL: &str = "https://github.com/pfkellogg/fm1-mirror-spyglass-android/releases/download/sounds-4/GeneralUser-GS.sf2";   // our own copy, as its license asks (no direct links to the author's files)
 pub const SIZE_MB: u32 = 32;
 const FILE: &str = "GeneralUser-GS.sf2";
 
@@ -106,6 +106,33 @@ pub fn download() -> Result<(), String> {
         let _ = std::fs::remove_file(&part);
         return Err("the download wasn't a SoundFont".into());
     }
+    std::fs::rename(&part, &p).map_err(|e| e.to_string())
+}
+
+/// GeneralUser GS from a file the person downloaded (checked as a SoundFont), copied into place.
+pub fn install_file(src: &std::path::Path) -> Result<(), String> {
+    let bytes = std::fs::read(src).map_err(|e| e.to_string())?;
+    install_bytes(&bytes)
+}
+
+/// GeneralUser GS from the all-in-one download (rich/GeneralUser-GS.sf2 inside it).
+pub fn install_from_zip(zip: &[u8]) -> Result<(), String> {
+    use std::io::Read;
+    let mut a = zip::ZipArchive::new(std::io::Cursor::new(zip)).map_err(|e| e.to_string())?;
+    let mut f = a.by_name(&format!("{ID}/{FILE}")).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    f.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    install_bytes(&bytes)
+}
+
+fn install_bytes(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() < 1_000_000 || rustysynth::SoundFont::new(&mut std::io::Cursor::new(bytes)).is_err() {
+        return Err("not a SoundFont".into());
+    }
+    let p = path().ok_or("no folder for sounds")?;
+    std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+    let part = p.with_extension("part");
+    std::fs::write(&part, bytes).map_err(|e| e.to_string())?;
     std::fs::rename(&part, &p).map_err(|e| e.to_string())
 }
 
