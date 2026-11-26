@@ -736,6 +736,14 @@ impl App {
         }
     }
 
+    /// A light's width (for fit()).
+    fn led_w(ui: &egui::Ui, name: &str) -> f32 {
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let galley = ui.painter().layout_no_wrap(name.to_string(), font, Color32::WHITE);
+        let d = galley.size().y.max(14.0);
+        d + 6.0 + galley.size().x + 8.0
+    }
+
     /// A light with its name: green and bright when lit, dark when not. Clickable.
     fn led(ui: &mut egui::Ui, lit: bool, name: &str) -> egui::Response {
         let font = egui::TextStyle::Button.resolve(ui.style());
@@ -835,7 +843,7 @@ impl App {
             .max_width(room.width().min(860.0)).max_height(room.height() - 40.0).vscroll(true)
             .anchor(egui::Align2::CENTER_TOP, vec2(0.0, 20.0)).show(ctx, |ui| {
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Heading);
-                ui.label("Download the sounds you want, then pick them in the Sound menu: tick one or several to play them together. The lights in the bar show what you hear.");
+                ui.label("Download the sounds you want, then pick them in the Sound menu: click one or several to light them and play them together. The lights in the bar show what you hear.");
                 ui.separator();
                 match &list {
                     None => {
@@ -1307,18 +1315,28 @@ impl App {
             let (mut hear_fm1, mut sweeten_now, mut more) = (self.fm1_with_mellotron, self.sweeten, false);
             let mut new_pick = *rich::PICK.lock().unwrap();
             let pick_before = new_pick;
+            // the lights: one small green light for each sound you hear (the FM-1's own too)
+            let mut lights: Vec<(String, String)> = Vec::new();
+            if picked.is_empty() || self.fm1_with_mellotron {
+                lights.push(("fm1".into(), "FM-1".into()));
+            }
+            for (id, n) in picked.iter().zip(&names) {
+                lights.push((id.clone(), n.clone()));
+            }
             let sw = Self::width_for(ui, &[shown.as_str()]);
-            Self::fit(ui, Self::combo_w(ui, sw));
+            let lights_w: f32 = lights.iter().map(|(_, n)| Self::led_w(ui, n) + ui.spacing().item_spacing.x).sum();
+            Self::fit(ui, Self::combo_w(ui, sw) + ui.spacing().item_spacing.x + lights_w);   // the menu and all its lights on one row
             egui::ComboBox::from_id_salt("sound").selected_text(shown).width(sw).height(620.0)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show_ui(ui, |ui| {
                 ui.set_min_width(260.0);
                 if ui.selectable_label(picked.is_empty(), "FM-1 only (no sounds from this computer)").clicked() {
                     only_fm1 = true;
                 }
+                // each sound with the same light as in the bar: green = on. Click to turn it on or off
                 let mut check = |ui: &mut egui::Ui, id: &str| {
-                    let mut on = picked.iter().any(|p| p == id);
-                    if ui.checkbox(&mut on, mellotron::pretty(id)).changed() {
-                        toggles.push((id.to_string(), on));
+                    let on = picked.iter().any(|p| p == id);
+                    if Self::led(ui, on, &mellotron::pretty(id)).clicked() {
+                        toggles.push((id.to_string(), !on));
                     }
                 };
                 let mut shown_ids: Vec<&str> = Vec::new();
@@ -1376,14 +1394,7 @@ impl App {
             for (id, on) in toggles {
                 self.toggle_sound(&id, on);
             }
-            // the lights: one small green light for each sound you hear (the FM-1's own too); click one to turn it off
-            let mut lights: Vec<(String, String)> = Vec::new();
-            if picked.is_empty() || self.fm1_with_mellotron {
-                lights.push(("fm1".into(), "FM-1".into()));
-            }
-            for (id, n) in picked.iter().zip(&names) {
-                lights.push((id.clone(), n.clone()));
-            }
+            // the lights, right after the menu (click one to turn that sound off)
             for (id, n) in lights {
                 let r = Self::led(ui, true, &n);
                 if id == "fm1" {

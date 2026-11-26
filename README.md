@@ -73,7 +73,7 @@ open FM-1 Big Screen.
 
 ## The sounds (17, and Rich)
 
-**Sound › Get sounds…** lists every sound, each to download on its own, or **Get all** (from 1.3.31): flute, strings, choir, shakuhachi, flugelhorn, trumpet, violin, brass, sitar, French horn, harmonica, alto sax, clarinet, oboe, accordion and vibraphone, all
+**Sound › Get sounds…** lists every sound, each to download on its own, or **Get all** flute, strings, choir, shakuhachi, flugelhorn, trumpet, violin, brass, sitar, French horn, harmonica, alto sax, clarinet, oboe, accordion and vibraphone, all
 Mellotron-style tape sounds made from scratch by programs (no recordings: free to use in your own music), a **Grand Piano**
 (made from the [Salamander Grand Piano](https://github.com/sfzinstruments/SalamanderGrandPiano), a Yamaha C5 recorded by Alexander Holm,
 CC-BY 3.0), and **Rich**
@@ -251,6 +251,8 @@ The seventh: **[NACHTFAHRT + FM-1 Big Screen](https://github.com/pfkellogg/fm1-n
 **Built in by its author.** **[Skiff Atlatl](https://github.com/LIkst4/skiff-atlatl)** 1.2 by LIkst4, a six-track groovebox forked from Skiff, has the screen part in its own release: install it as it is, from its [Releases](https://github.com/LIkst4/skiff-atlatl/releases), and FM-1 Big Screen shows it big. No Big Screen version needed. Thank you, LIkst4! Tested on a real FM-1 (2026-11-21). The app names it "Skiff Atlatl" from Mac 1.3.15 and Android 1.6.5 (earlier versions call it "Skiff").
 
 **Sound menu** (from 1.3.26): one **Sound** menu in the bar picks what you hear, in one click: **FM-1 only**, **Rich sounds**, or a Mellotron (flute, strings, choir); **Hear the FM-1 too** (on: the FM-1's own sound as well; off: only the one from the computer), **Sweeten**, Rich's instrument, and **Get sounds…** are in it too. It replaces the Mellotron button (which stepped through the sounds, then off, with no quick way back), the FM-1 / Mellotron lights and the Sweeten button. The bar wraps onto a new row when the window is narrow, so nothing is cut off.
+
+**Sounds together, and a light for each** (from 1.3.32): the **Sound** menu is sorted into families (**Keys**: Grand Piano, Vibraphone, Accordion; **Strings and voices**: Strings, Violin, Choir, Sitar; **Brass**: Trumpet, Flugelhorn, Brass, French Horn; **Woodwinds**: Flute, Shakuhachi, Alto Sax, Clarinet, Oboe, Harmonica; **Rich**), each sound with a light: click one to light it, click it again to turn it off, and light as many as you like to play them together (the menu stays open while you pick). In the bar, right after the Sound button, a small green light shows each sound you hear, the FM-1's own included (with **Hear the FM-1 too**): two sounds, two lights; three, three. They stay together on one row. Click a light in the bar to turn that sound off. The Sound button names what's on ("Sound: Sitar + Strings", or "Sound: 3 sounds"). The **Get sounds…** window always fits inside the app with its ✕ in sight (in 1.3.31 a long list could push it off the top), and the names read properly: Grand Piano, Alto Sax, French Horn.
 
 **Click the firmware's own switches** (from 1.3.27): on B3 ORGAN (fm1-dock), the switches on its screen are clickable on the big screen: **PERC** (and 3RD, FAST, SOFT), **LES**, **OD**, **KEYS** and the vibrato (**UP ON**). The pointer turns into a hand over them, and a click presses the FM-1 button that switches it (PERC is ENV, OD is SEL, and so on). Quick clicks on the Lights strip's buttons and keys always count now too: before 1.3.27 a click shorter than one frame could be lost.
 
