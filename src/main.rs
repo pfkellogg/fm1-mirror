@@ -381,6 +381,8 @@ struct App {
     others: Vec<Unit>,
     /// All the FM-1s' screens at once, side by side (else the selected one, big).
     side_by_side: bool,
+    /// Locked: Big Knobs and the Key Lights strip work every FM-1 at once (unlocked: the one picked).
+    locked: bool,
     /// An install asked for while several FM-1s were plugged in: said why not, until then.
     multi_install_note: Option<Instant>,
     /// For seeing whether the FM-1 is still plugged in.
@@ -522,6 +524,7 @@ impl App {
             port: saved["fm1_port"].as_str().unwrap_or("").to_string(),   // the one picked last time, if it's there
             others: Vec::new(),
             side_by_side: saved["side_by_side"].as_bool().unwrap_or(false),
+            locked: saved["locked"].as_bool().unwrap_or(false),
             multi_install_note: None,
             scanner: MidiOutput::new(APP_NAME).ok(),
             looked: None,
@@ -594,7 +597,7 @@ impl App {
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap(), "last_firmware": self.last_firmware, "side_by_side": self.side_by_side, "fm1_port": self.port });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap(), "last_firmware": self.last_firmware, "side_by_side": self.side_by_side, "fm1_port": self.port, "locked": self.locked });
         if let Some(at) = self.main_at {
             s["window_x"] = json!(at.x);
             s["window_y"] = json!(at.y);
@@ -711,6 +714,15 @@ impl App {
         self.panel_held = Default::default();
         self.shared.lock().unwrap().changed = true;
         self.store();
+    }
+
+    /// Where Big Knobs and the Key Lights strip send: the FM-1 picked, or every one while locked.
+    fn targets(&self) -> Vec<&Link> {
+        let mut v: Vec<&Link> = self.link.iter().collect();
+        if self.locked {
+            v.extend(self.others.iter().filter_map(|u| u.link.as_ref()));
+        }
+        v
     }
 
     /// Every FM-1's screen painted again (a new look, Smooth on or off).
@@ -1349,27 +1361,29 @@ impl App {
 
     /// A click: the button pressed now and let go TAP later, on a timer of its own (not waiting for a frame).
     fn tap(&self, id: u8) {
-        let Some(l) = &self.link else { return };
         self.send_press(id, true);
-        let (out, fb) = (l.out.clone(), l.fb.clone());
-        std::thread::spawn(move || {
-            std::thread::sleep(knobs::TAP);
-            if fb.is_active() {
-                let mut panel = fb.panel.lock().unwrap();
-                panel.press(id, false);
-                if let Some(f) = panel.next() {
-                    let _ = out.lock().unwrap().send(&f);
+        for l in self.targets() {
+            let (out, fb) = (l.out.clone(), l.fb.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(knobs::TAP);
+                if fb.is_active() {
+                    let mut panel = fb.panel.lock().unwrap();
+                    panel.press(id, false);
+                    if let Some(f) = panel.next() {
+                        let _ = out.lock().unwrap().send(&f);
+                    }
+                } else {
+                    let _ = out.lock().unwrap().send(&knobs::press(id, false));
                 }
-            } else {
-                let _ = out.lock().unwrap().send(&knobs::press(id, false));
-            }
-        });
+            });
+        }
     }
 
     /// Presses (or lets go of) an FM-1 button or key, the way the Lights strip does.
     fn send_press(&self, id: u8, down: bool) {
-        let Some(l) = &self.link else { return };
-        l.send_remote(&knobs::press(id, down), |p| p.press(id, down));
+        for l in self.targets() {
+            l.send_remote(&knobs::press(id, down), |p| p.press(id, down));
+        }
     }
 
     fn buttons(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1406,6 +1420,17 @@ impl App {
                 .clicked() {
                 self.side_by_side = !self.side_by_side;
                 self.repaint_all();
+                self.store();
+            }
+            let lock = if self.locked { "LOCKED: knobs move all" } else { "Unlocked: one FM-1" };
+            let lw = Self::width_for(ui, &["LOCKED: knobs move all", "Unlocked: one FM-1"]);
+            let b = egui::Button::new(egui::RichText::new(lock).strong().color(if self.locked { Color32::BLACK } else { Color32::WHITE }))
+                .fill(if self.locked { Color32::from_rgb(255, 150, 40) } else { Color32::from_gray(55) });
+            Self::fit(ui, lw);
+            if ui.add_sized([lw, h], b)
+                .on_hover_text(if self.locked { "Locked: Big Knobs and the Key Lights strip work every FM-1 at once. Click to unlock" } else { "Unlocked: Big Knobs and the Key Lights strip work only the FM-1 picked. Click to lock them all together" })
+                .clicked() {
+                self.locked = !self.locked;
                 self.store();
             }
             });
@@ -2112,31 +2137,34 @@ impl eframe::App for App {
                 });
         }
         if self.knobs_on && !showing_help && !stale {
-            let link = self.link.as_ref();
+            let links: Vec<&Link> = { let mut v: Vec<&Link> = self.link.iter().collect(); if self.locked { v.extend(self.others.iter().filter_map(|u| u.link.as_ref())); } v };
             let knobs = &mut self.knobs;
             egui::TopBottomPanel::bottom("knobs").exact_height(130.0).show_separator_line(false)
                 .frame(egui::Frame::new().fill(Color32::from_gray(18)).inner_margin(egui::Margin::same(6)))
                 .show(ctx, |ui| knobs::knobs_ui(ui, knobs, &mut |m| {
-                    let Some(l) = link else { return };
-                    // Charles Vestal's fm1-base mirror: its own remote, one command at a time (fm1base.rs)
-                    l.send_remote(m, |panel| match m.get(4) {
-                        Some(4) => panel.turn(m[5], if m[6] >= 64 { m[6] as i32 - 128 } else { m[6] as i32 }),
-                        Some(6) => panel.master(m[5] as u16 | (m[6] as u16) << 7),
-                        _ => {}
-                    });
+                    // to the FM-1 picked, or every one while locked
+                    for l in &links {
+                        // Charles Vestal's fm1-base mirror: its own remote, one command at a time (fm1base.rs)
+                        l.send_remote(m, |panel| match m.get(4) {
+                            Some(4) => panel.turn(m[5], if m[6] >= 64 { m[6] as i32 - 128 } else { m[6] as i32 }),
+                            Some(6) => panel.master(m[5] as u16 | (m[6] as u16) << 7),
+                            _ => {}
+                        });
+                    }
                 }));
         }
         if self.lights_on && !showing_help && !stale {
             let played = self.played.lock().unwrap().keys_down();
-            let link = self.link.as_ref();
+            let links: Vec<&Link> = { let mut v: Vec<&Link> = self.link.iter().collect(); if self.locked { v.extend(self.others.iter().filter_map(|u| u.link.as_ref())); } v };
             let held = &mut self.panel_held;
             let got = self.shared.lock().unwrap().lights;
             let (l, seen) = (got.unwrap_or_default(), got.is_some());
             egui::TopBottomPanel::bottom("lights").exact_height(150.0).show_separator_line(false)
                 .frame(egui::Frame::new().fill(Color32::from_gray(12)).inner_margin(egui::Margin::same(6)))
                 .show(ctx, |ui| knobs::lights_ui(ui, l, knobs::played_keys(&played), seen, held, &mut |id, down| {
-                    let Some(lk) = link else { return };
-                    lk.send_remote(&knobs::press(id, down), |p| p.press(id, down));
+                    for lk in &links {
+                        lk.send_remote(&knobs::press(id, down), |p| p.press(id, down));
+                    }
                 }));
         }
         if self.multi_install_note.is_some_and(|t| t.elapsed() < Duration::from_secs(12)) {

@@ -31,6 +31,9 @@ def cb(msg, _):
     if len(m) >= 5 and m[:4] == [0xf0, 0x7d, ord('F'), ord('S')]:
         last_hello[0] = time.time()
         if m[4] == 1: asked.set()
+        if m[4] >= 2: print("got", " ".join(f"{b:02x}" for b in m[:12]), flush=True)   # a knob or a button (the lock)
+    elif m and m[0] == 0xf0:
+        print("got", " ".join(f"{b:02x}" for b in m[:12]), flush=True)   # a knob, a button (to check the lock)
 mi.set_callback(cb)
 print("ready", NAME, flush=True)
 t0 = time.time(); prev = None
