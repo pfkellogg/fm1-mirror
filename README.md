@@ -71,6 +71,19 @@ open FM-1 Big Screen.
 
 **On Android:** see [FM-1 Big Screen + Spyglass](https://github.com/pfkellogg/fm1-mirror-spyglass-android).
 
+## The sounds (16, and Rich)
+
+**Sound › Get sounds…** lists every sound, each to download on its own, or **Get all** (from 1.3.31): flute, strings, choir, shakuhachi, flugelhorn, trumpet, violin, brass, sitar, French horn, harmonica, alto sax, clarinet, oboe, accordion and vibraphone, all
+Mellotron-style tape sounds made from scratch by programs (no recordings: free to use in your own music), and **Rich**
+(GeneralUser GS by S. Christian Collins, from our own copy).
+
+**Or download them in a browser:** each sound's zip, or [everything in one file](https://github.com/pfkellogg/fm1-mirror-spyglass-android/releases/download/sounds-5/fm1-big-screen-sounds.zip)
+(about 190 MB). From 1.3.31 FM-1 Big Screen finds them in your **Downloads** folder by itself when it starts (and when
+you open Get sounds…) and adds them to the Sound menu: nothing to unzip.
+
+**Or play them with no app at all:** [aikellogg.com/#/play](https://aikellogg.com/#/play): plug in the FM-1, click Connect
+(Chrome or Edge), and play; pick several sounds to layer them.
+
 ## How it works, in plain words
 
 The FM-1 doesn't normally tell a computer what's on its screen. So the FM-1 needs slightly different
