@@ -30,19 +30,34 @@ const FILL: u8 = 0x52;
 const INPUT: u8 = 0x53;
 const REMOTE: u8 = 0x54;
 
-/// Its mirror answered on this link: Big Knobs speak its remote (set by the input, cleared on a new link).
-pub static ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// One FM-1's fm1-base mirror (each FM-1 plugged in has its own: several can be linked at once).
+pub struct State {
+    /// Its mirror answered on this link: Big Knobs speak its remote.
+    pub active: std::sync::atomic::AtomicBool,
+    /// The last rect / fill's seq (256: none yet), and a frame found missing (a gap in seq): the screen is asked for
+    /// again (as fm1-base's own viewer does), so nothing a lost frame carried stays wrong (h1's full-screen animation).
+    pub last_seq: std::sync::atomic::AtomicU16,
+    pub missed: std::sync::atomic::AtomicBool,
+    /// Big Knobs' and Key Lights' remote commands for this FM-1.
+    pub panel: std::sync::Mutex<Remote>,
+}
 
-/// The last rect / fill's seq (256: none yet), and a frame found missing (a gap in seq): the screen is asked for
-/// again (as fm1-base's own viewer does), so nothing a lost frame carried stays wrong (h1's full-screen animation).
-pub static LAST_SEQ: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(256);
-pub static MISSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+impl Default for State {
+    fn default() -> Self {
+        State { active: Default::default(), last_seq: std::sync::atomic::AtomicU16::new(256), missed: Default::default(), panel: Default::default() }
+    }
+}
 
-fn seen(seq: u8) {
-    use std::sync::atomic::Ordering::Relaxed;
-    let last = LAST_SEQ.swap(seq as u16, Relaxed);
-    if last < 256 && seq != (last as u8).wrapping_add(1) {
-        MISSED.store(true, Relaxed);
+impl State {
+    pub fn is_active(&self) -> bool {
+        self.active.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn seen(&self, seq: u8) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let last = self.last_seq.swap(seq as u16, Relaxed);
+        if last < 256 && seq != (last as u8).wrapping_add(1) {
+            self.missed.store(true, Relaxed);
+        }
     }
 }
 
@@ -105,9 +120,6 @@ pub struct Remote {
     presses: std::collections::VecDeque<(u8, u8, u8)>,
 }
 
-pub static PANEL: std::sync::Mutex<Remote> =
-    std::sync::Mutex::new(Remote { seq: 0, waiting: None, turns: [0; 7], master: None, presses: std::collections::VecDeque::new() });
-
 impl Remote {
     /// One of our knobs (knobs.rs: 0 SELECT, 1 ALGORITHM, 2..5 KNOB 1..4, 6 PRESETS) turned `n` clicks.
     pub fn turn(&mut self, ours: u8, n: i32) {
@@ -152,14 +164,14 @@ impl Remote {
 }
 
 /// One message from the FM-1, into the screen.
-pub fn apply(screen: &mut Screen, m: &[u8]) -> Got {
+pub fn apply(screen: &mut Screen, m: &[u8], st: &State) -> Got {
     let Some((command, body)) = parse(m) else { return Got::Nothing };
     match command {
         REQUEST => Got::Hello,
         INPUT => lights(&body).map_or(Got::Nothing, Got::Lights),
         REMOTE => Got::Answered,
         RECT | FILL if body.len() >= 5 => {
-            seen(body[4]);
+            st.seen(body[4]);
             if (command == RECT && rect(screen, &body)) || (command == FILL && fill(screen, &body)) { Got::Painted } else { Got::Nothing }
         }
         _ => Got::Nothing,
@@ -310,11 +322,11 @@ mod tests {
     #[test]
     fn hello_rect_and_fill() {
         let mut s = Screen::default();
-        assert_eq!(apply(&mut s, &device(REQUEST, &[5, 1, 239, 239])), Got::Hello);
+        assert_eq!(apply(&mut s, &device(REQUEST, &[5, 1, 239, 239]), &State::default()), Got::Hello);
         // A 4x2 rectangle at (10, 20): 3 pixels of 0xF800 (new colour), 1 more of it (repeat), then 4 of 0x001F
         // (new), and nothing left over.
         let body = [10, 20, 4, 2, 0, 0xc2, 0xf8, 0x00, 0x00, 0xc3, 0x00, 0x1f];
-        assert_eq!(apply(&mut s, &device(RECT, &body)), Got::Painted);
+        assert_eq!(apply(&mut s, &device(RECT, &body), &State::default()), Got::Painted);
         assert_eq!(s.pixels[20 * SIZE + 10], 0xf800);
         assert_eq!(s.pixels[20 * SIZE + 13], 0xf800);
         assert_eq!(s.pixels[21 * SIZE + 10], 0x001f);
@@ -322,10 +334,10 @@ mod tests {
         // The cache, within one rectangle (it starts empty for each): 0xF800, 0x07E0, then 0xF800 again by its index.
         let i = hash(0xf800) as u8;
         let body = [0, 0, 3, 1, 1, 0xc0, 0xf8, 0x00, 0xc0, 0x07, 0xe0, 0x80 | i];
-        assert_eq!(apply(&mut s, &device(RECT, &body)), Got::Painted);
+        assert_eq!(apply(&mut s, &device(RECT, &body), &State::default()), Got::Painted);
         assert_eq!(s.pixels[..3], [0xf800, 0x07e0, 0xf800]);
         // A fill.
-        assert_eq!(apply(&mut s, &device(FILL, &[100, 100, 3, 3, 2, 0x12, 0x34])), Got::Painted);
+        assert_eq!(apply(&mut s, &device(FILL, &[100, 100, 3, 3, 2, 0x12, 0x34]), &State::default()), Got::Painted);
         assert_eq!(s.pixels[102 * SIZE + 102], 0x1234);
     }
 
@@ -335,11 +347,11 @@ mod tests {
         let mut m = device(RECT, &[0, 0, 2, 1, 0, 0xc1, 0x12, 0x34]);
         let at = m.len() - 2;
         m[at] ^= 1; // the checksum no longer adds up
-        assert_eq!(apply(&mut s, &m), Got::Nothing);
-        assert_eq!(apply(&mut s, &crate::screen::HELLO), Got::Nothing);
+        assert_eq!(apply(&mut s, &m, &State::default()), Got::Nothing);
+        assert_eq!(apply(&mut s, &crate::screen::HELLO, &State::default()), Got::Nothing);
         // Too many pixels for the rectangle.
-        assert_eq!(apply(&mut s, &device(RECT, &[0, 0, 1, 1, 0, 0xc5, 0x12, 0x34])), Got::Nothing);
+        assert_eq!(apply(&mut s, &device(RECT, &[0, 0, 1, 1, 0, 0xc5, 0x12, 0x34]), &State::default()), Got::Nothing);
         // Off the screen.
-        assert_eq!(apply(&mut s, &device(RECT, &[239, 0, 2, 1, 0, 0xc1, 0x12, 0x34])), Got::Nothing);
+        assert_eq!(apply(&mut s, &device(RECT, &[239, 0, 2, 1, 0, 0xc1, 0x12, 0x34]), &State::default()), Got::Nothing);
     }
 }

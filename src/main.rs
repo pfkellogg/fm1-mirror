@@ -230,6 +230,23 @@ struct Link {
     stop: Arc<std::sync::atomic::AtomicBool>,
     /// Set by the hello thread when the FM-1 has gone away.
     lost: Arc<std::sync::atomic::AtomicBool>,
+    /// Its fm1-base mirror, if it speaks that one (this FM-1's own: several FM-1s can be linked at once).
+    fb: Arc<fm1base::State>,
+}
+
+impl Link {
+    /// Sends a Big Knobs / Key Lights command: through fm1-base's remote when this FM-1 speaks it, as it is otherwise.
+    fn send_remote(&self, plain: &[u8], remote: impl FnOnce(&mut fm1base::Remote)) {
+        if self.fb.is_active() {
+            let mut panel = self.fb.panel.lock().unwrap();
+            remote(&mut panel);
+            if let Some(f) = panel.next() {
+                let _ = self.out.lock().unwrap().send(&f);
+            }
+        } else {
+            let _ = self.out.lock().unwrap().send(plain);
+        }
+    }
 }
 
 impl Drop for Link {
@@ -251,6 +268,7 @@ fn hellos(
     lost: Arc<std::sync::atomic::AtomicBool>,
     base: Arc<std::sync::atomic::AtomicBool>,
     v2_answers: Arc<std::sync::atomic::AtomicU32>,
+    fb: Arc<fm1base::State>,
 ) {
     use std::sync::atomic::Ordering;
     const BASE_ASK_AT: [u64; 3] = [1000, 5000, 6000]; // ms after opening: clear of the questions at 2, 3 and 4 s
@@ -293,13 +311,13 @@ fn hellos(
         }
         if base.load(Ordering::Relaxed) {
             // Big Knobs' turns still waiting for the last answer (fm1base.rs Remote)
-            let next = fm1base::PANEL.lock().unwrap().next();
+            let next = fb.panel.lock().unwrap().next();
             if let Some(f) = next {
                 let _ = output.lock().unwrap().send(&f);
             }
-            if fm1base::MISSED.load(Ordering::Relaxed) && missed_at.elapsed() >= Duration::from_millis(700) {
+            if fb.missed.load(Ordering::Relaxed) && missed_at.elapsed() >= Duration::from_millis(700) {
                 // a frame went missing on the way: the whole screen again (what the viewer has is skipped)
-                fm1base::MISSED.store(false, Ordering::Relaxed);
+                fb.missed.store(false, Ordering::Relaxed);
                 missed_at = Instant::now();
                 base_at = Instant::now();
                 let _ = output.lock().unwrap().send(&fm1base::request(2));
@@ -345,9 +363,26 @@ fn settings_path() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join(SETTINGS_DIR).join("settings.json"))
 }
 
+/// Another FM-1 plugged in at the same time, linked and listening, while the bar works with the one selected (which
+/// lives in App's own fields; a tab swaps them).
+struct Unit {
+    port: String,
+    shared: Arc<Mutex<Shared>>,
+    link: Option<Link>,
+    texture: Option<TextureHandle>,
+    firmware_checked: bool,
+}
+
 struct App {
     shared: Arc<Mutex<Shared>>,
     link: Option<Link>,
+    /// The selected FM-1's port, and the others plugged in (each with its own link and screen).
+    port: String,
+    others: Vec<Unit>,
+    /// All the FM-1s' screens at once, side by side (else the selected one, big).
+    side_by_side: bool,
+    /// An install asked for while several FM-1s were plugged in: said why not, until then.
+    multi_install_note: Option<Instant>,
     /// For seeing whether the FM-1 is still plugged in.
     scanner: Option<MidiOutput>,
     looked: Option<Instant>,
@@ -484,6 +519,10 @@ impl App {
         let mut app = App {
             shared: Arc::default(),
             link: None,
+            port: saved["fm1_port"].as_str().unwrap_or("").to_string(),   // the one picked last time, if it's there
+            others: Vec::new(),
+            side_by_side: saved["side_by_side"].as_bool().unwrap_or(false),
+            multi_install_note: None,
             scanner: MidiOutput::new(APP_NAME).ok(),
             looked: None,
             look: Look::ALL.into_iter().find(|l| saved["look"] == l.key()).unwrap_or(Look::Color),
@@ -555,7 +594,7 @@ impl App {
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap(), "last_firmware": self.last_firmware });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap(), "last_firmware": self.last_firmware, "side_by_side": self.side_by_side, "fm1_port": self.port });
         if let Some(at) = self.main_at {
             s["window_x"] = json!(at.x);
             s["window_y"] = json!(at.y);
@@ -594,30 +633,50 @@ impl App {
         }
         if self.looked.is_none_or(|t| now - t >= Duration::from_secs(1)) {
             self.looked = Some(now);
-            if let Some(link) = &self.link {
-                let still_there = self.scanner.as_ref().is_some_and(|o| o.ports().iter().any(|p| o.port_name(p).is_ok_and(|n| n == link.name)));
-                // Plugged in while on Bluetooth: USB is much faster, so move over.
-                let usb_now = is_bluetooth(&link.name)
-                    && self.scanner.as_ref().is_some_and(|o| o.ports().iter().any(|p| o.port_name(p).is_ok_and(|n| is_fm1(&n) && !is_bluetooth(&n))));
-                if !still_there || usb_now || link.lost.load(std::sync::atomic::Ordering::Relaxed) {
-                    self.link = None;
-                }
+            let ports = fm1_ports(self.scanner.as_ref());
+            let lost = |l: &Link| !ports.contains(&l.name) || l.lost.load(std::sync::atomic::Ordering::Relaxed);
+            // (a Bluetooth link while the FM-1 is also on USB isn't in `ports`: it moves over to USB, much faster)
+            if self.link.as_ref().is_some_and(lost) {
+                self.link = None;
+            }
+            self.others.retain(|u| u.link.as_ref().is_some_and(|l| !lost(l)));
+            if self.link.is_none() && !ports.contains(&self.port) && !self.others.is_empty() {
+                self.select(0);                       // the selected FM-1 went: the next one takes its place
             }
             if self.link.is_none() {
                 // macOS may still call it by an old firmware's name ("ChoralRoot FM-1" for LOOM-8): the FM-1's own
                 // USB name again, for every app (usbname.rs)
-                for (old, new) in usbname::fix_stale_names(is_fm1) {
-                    eprintln!("renamed the USB MIDI device \"{old}\" to \"{new}\", the name the FM-1 reports");
+                if self.others.is_empty() {
+                    for (old, new) in usbname::fix_stale_names(is_fm1) {
+                        eprintln!("renamed the USB MIDI device \"{old}\" to \"{new}\", the name the FM-1 reports");
+                    }
                 }
-                {
-                    let mut s = self.shared.lock().unwrap();
-                    s.identity = None;
-                    s.build = None;
-                    s.firmware = None;
-                    s.sound = None;
+                let taken: Vec<String> = self.others.iter().map(|u| u.port.clone()).collect();
+                let free = |p: &&String| !taken.contains(p);
+                let want = ports.iter().find(|p| **p == self.port).or_else(|| ports.iter().find(free)).cloned();
+                if let Some(port) = want {
+                    {
+                        let mut s = self.shared.lock().unwrap();
+                        s.identity = None;
+                        s.build = None;
+                        s.firmware = None;
+                        s.sound = None;
+                    }
+                    self.firmware_checked = false;
+                    self.link = open(&port, self.shared.clone(), self.played.clone(), ctx.clone());
+                    self.port = port;
                 }
-                self.firmware_checked = false;
-                self.link = open(self.shared.clone(), self.played.clone(), ctx.clone());
+            }
+            // every other FM-1 plugged in: its own link, listening
+            for port in &ports {
+                if *port == self.port || self.others.iter().any(|u| u.port == *port) {
+                    continue;
+                }
+                let shared: Arc<Mutex<Shared>> = Arc::default();
+                if let Some(link) = open(port, shared.clone(), self.played.clone(), ctx.clone()) {
+                    eprintln!("another FM-1: {port}");
+                    self.others.push(Unit { port: port.clone(), shared, link: Some(link), texture: None, firmware_checked: false });
+                }
             }
             *self.keys_out.lock().unwrap() = self.link.as_ref().map(|l| l.out.clone());
             self.keep_keys(ctx);
@@ -629,6 +688,58 @@ impl App {
             }
         }
         ctx.request_repaint_after(HELLO_EVERY);
+    }
+
+    /// Makes others[i] the selected FM-1 (the bar, Big Knobs, Key Lights and the keyboard work with it).
+    fn select(&mut self, i: usize) {
+        if i >= self.others.len() {
+            return;
+        }
+        if let Some(link) = &self.link {
+            keys::silence(&link.out);                 // no note left hanging on the one let go
+        }
+        let u = &mut self.others[i];
+        std::mem::swap(&mut self.shared, &mut u.shared);
+        std::mem::swap(&mut self.link, &mut u.link);
+        std::mem::swap(&mut self.texture, &mut u.texture);
+        std::mem::swap(&mut self.firmware_checked, &mut u.firmware_checked);
+        std::mem::swap(&mut self.port, &mut u.port);
+        if u.link.is_none() {
+            self.others.remove(i);                    // (the one that was selected had gone)
+        }
+        *self.keys_out.lock().unwrap() = self.link.as_ref().map(|l| l.out.clone());
+        self.panel_held = Default::default();
+        self.shared.lock().unwrap().changed = true;
+        self.store();
+    }
+
+    /// Every FM-1's screen painted again (a new look, Smooth on or off).
+    fn repaint_all(&self) {
+        self.shared.lock().unwrap().changed = true;
+        for u in &self.others {
+            u.shared.lock().unwrap().changed = true;
+        }
+    }
+
+    /// All the FM-1s in port order (stable tabs): (port, selected, its other index).
+    fn units_in_order(&self) -> Vec<(String, bool, Option<usize>)> {
+        let mut v: Vec<(String, bool, Option<usize>)> = self.others.iter().enumerate().map(|(i, u)| (u.port.clone(), false, Some(i))).collect();
+        if self.link.is_some() || !self.port.is_empty() {
+            v.push((self.port.clone(), true, None));
+        }
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+
+    /// A tab's name: "FM-1 2 · SHRUB" (its number, then what it runs when it said so).
+    fn unit_name(n: usize, shared: &Mutex<Shared>, port: &str) -> String {
+        let s = shared.lock().unwrap();
+        let known = screen::community(s.firmware.as_deref(), s.identity.as_deref(), port).map(|c| c.name.to_string());
+        let what = known.or_else(|| s.firmware.clone().map(|f| f.split_whitespace().take(2).collect::<Vec<_>>().join(" ")));
+        match what {
+            Some(w) if !w.is_empty() => format!("FM-1 {n} · {w}"),
+            _ => format!("FM-1 {n}"),
+        }
     }
 
     /// The keyboard, FM-1 or not (the spyglass shows it either way; it plays the FM-1 while there is one); let go if
@@ -657,8 +768,21 @@ impl App {
     }
 
     fn take_screen(&mut self, ctx: &egui::Context) {
+        let mut tex = self.texture.take();
+        Self::render(ctx, &self.shared, &mut tex, self.look, self.smooth_on);
+        self.texture = tex;
+        // the other FM-1s' screens too, while they're shown (side by side)
+        if self.side_by_side {
+            for u in &mut self.others {
+                Self::render(ctx, &u.shared, &mut u.texture, self.look, self.smooth_on);
+            }
+        }
+    }
+
+    /// One FM-1's screen into its texture, when it changed.
+    fn render(ctx: &egui::Context, shared: &Mutex<Shared>, texture: &mut Option<TextureHandle>, look: Look, smooth_on: bool) {
         let pixels = {
-            let mut s = self.shared.lock().unwrap();
+            let mut s = shared.lock().unwrap();
             if s.v2.overdue() {
                 // version 2 with no SYNC for a while (the screen changes faster than it can be sent): show what came
                 let s = &mut *s;
@@ -672,17 +796,17 @@ impl App {
             s.changed = false;
             s.screen.pixels.clone()
         };
-        let painted = self.look.paint_all(&pixels, SIZE);
+        let painted = look.paint_all(&pixels, SIZE);
         // Nearest: the FM-1's 5x7 letters stay crisp blocks however big they get. Smooth: a bigger copy, blended.
-        let (img, options) = if self.smooth_on {
+        let (img, options) = if smooth_on {
             let side = SIZE * smooth::SCALE;
             (ColorImage { size: [side, side], pixels: smooth::smooth(&painted, SIZE) }, TextureOptions::LINEAR)
         } else {
             (ColorImage { size: [SIZE, SIZE], pixels: painted }, TextureOptions::NEAREST)
         };
-        match &mut self.texture {
+        match texture {
             Some(t) => t.set(img, options),
-            None => self.texture = Some(ctx.load_texture("fm1", img, options)),
+            None => *texture = Some(ctx.load_texture("fm1", img, options)),
         }
     }
 
@@ -982,7 +1106,7 @@ impl App {
     fn toggle_smooth(&mut self) {
         self.smooth_on = !self.smooth_on;
         self.mirror_on = true; // it's the mirror that's smooth: show it
-        self.shared.lock().unwrap().changed = true; // repaint it the other way
+        self.repaint_all(); // repaint it the other way
         self.store();
     }
 
@@ -990,7 +1114,7 @@ impl App {
     /// The FM-1's firmware has the older Big Screen: its screen came a while ago, but no Key Lights (Charles Vestal's
     /// mirror sends its lights its own way: never stale).
     fn stale(&self) -> bool {
-        if self.link.is_none() || fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.link.as_ref().is_none_or(|l| l.fb.is_active()) {
             return false;
         }
         let s = self.shared.lock().unwrap();
@@ -1190,6 +1314,11 @@ impl App {
     }
 
     fn start_install(&mut self) {
+        if !self.others.is_empty() {
+            // with several FM-1s plugged in the installer could reach the wrong one: one at a time
+            self.multi_install_note = Some(Instant::now());
+            return;
+        }
         let progress: Arc<Mutex<install::Progress>> = Arc::default();
         self.install = Some(progress.clone());
         self.link = None; // the installer has the FM-1 to itself
@@ -1222,11 +1351,11 @@ impl App {
     fn tap(&self, id: u8) {
         let Some(l) = &self.link else { return };
         self.send_press(id, true);
-        let out = l.out.clone();
+        let (out, fb) = (l.out.clone(), l.fb.clone());
         std::thread::spawn(move || {
             std::thread::sleep(knobs::TAP);
-            if fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
-                let mut panel = fm1base::PANEL.lock().unwrap();
+            if fb.is_active() {
+                let mut panel = fb.panel.lock().unwrap();
                 panel.press(id, false);
                 if let Some(f) = panel.next() {
                     let _ = out.lock().unwrap().send(&f);
@@ -1240,15 +1369,7 @@ impl App {
     /// Presses (or lets go of) an FM-1 button or key, the way the Lights strip does.
     fn send_press(&self, id: u8, down: bool) {
         let Some(l) = &self.link else { return };
-        if fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
-            let mut panel = fm1base::PANEL.lock().unwrap();
-            panel.press(id, down);
-            if let Some(f) = panel.next() {
-                let _ = l.out.lock().unwrap().send(&f);
-            }
-        } else {
-            let _ = l.out.lock().unwrap().send(&knobs::press(id, down));
-        }
+        l.send_remote(&knobs::press(id, down), |p| p.press(id, down));
     }
 
     fn buttons(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1260,6 +1381,36 @@ impl App {
         }
         ui.spacing_mut().button_padding.x = ui.spacing().button_padding.x.min(8.0);
         let h = ui.spacing().interact_size.y;
+        // Several FM-1s plugged in: a tab for each (the bar works with the one picked), and Side by side
+        if !self.others.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+            let units = self.units_in_order();
+            let mut pick: Option<usize> = None;
+            for (n, (port, selected, other)) in units.iter().enumerate() {
+                let shared = match other { Some(i) => self.others[*i].shared.clone(), None => self.shared.clone() };
+                let name = Self::unit_name(n + 1, &shared, port);
+                let tab = egui::Button::new(egui::RichText::new(&name).strong().color(if *selected { Color32::BLACK } else { Color32::WHITE }))
+                    .fill(if *selected { Color32::from_rgb(255, 210, 31) } else { Color32::from_gray(55) });
+                Self::fit(ui, Self::width_for(ui, &[name.as_str()]) + 8.0);
+                if ui.add_sized([Self::width_for(ui, &[name.as_str()]) + 8.0, h], tab)
+                    .on_hover_text(if *selected { "This FM-1: the buttons, Big Knobs, Key Lights and the keyboard work with it" } else { "Click to work with this FM-1" })
+                    .clicked() {
+                    pick = *other;
+                }
+            }
+            if let Some(i) = pick {
+                self.select(i);
+            }
+            if ui.add_sized([Self::width_for(ui, &["Side by side"]), h], egui::SelectableLabel::new(self.side_by_side, "Side by side"))
+                .on_hover_text("Every FM-1's screen at once (click one to work with it). Off: the one picked, big")
+                .clicked() {
+                self.side_by_side = !self.side_by_side;
+                self.repaint_all();
+                self.store();
+            }
+            });
+            ui.add_space(4.0);
+        }
         ui.horizontal_wrapped(|ui| {
             let shown = match &self.keys {
                 Some(k) => format!("Keys: {}", k.name),
@@ -1459,7 +1610,7 @@ impl App {
                 }
             });
             if self.look != before {
-                self.shared.lock().unwrap().changed = true; // repaint in the new look
+                self.repaint_all(); // repaint in the new look
                 self.store();
             }
             let w = Self::width_for(ui, &["Leave full screen", "Full screen"]);
@@ -1521,33 +1672,39 @@ impl App {
     }
 }
 
-/// Opens the first FM-1 found, both ways; its screen messages go into `shared`.
-fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui::Context) -> Option<Link> {
+/// Every FM-1 plugged in, by port name: over USB (one that names itself, Open firmware, before the original's "USB
+/// Composite"); over Bluetooth only an FM-1 that isn't also on USB (it would be the same one, slower).
+fn fm1_ports(scanner: Option<&MidiOutput>) -> Vec<String> {
+    let Some(o) = scanner else { return Vec::new() };
+    let names: Vec<String> = o.ports().iter().filter_map(|p| o.port_name(p).ok()).filter(|n| is_fm1(n)).collect();
+    let mut usb: Vec<String> = names.iter().filter(|n| !is_bluetooth(n)).cloned().collect();
+    usb.sort_by_key(|n| (n.to_lowercase().contains("usb composite"), n.clone()));
+    if usb.is_empty() {
+        let mut bt: Vec<String> = names.into_iter().filter(|n| is_bluetooth(n)).collect();
+        bt.sort();
+        return bt;
+    }
+    usb
+}
+
+/// Opens the FM-1 on port `name`, both ways; its screen messages go into `shared`.
+fn open(name: &str, shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui::Context) -> Option<Link> {
     let mut input = MidiInput::new(APP_NAME).ok()?;
     input.ignore(Ignore::None); // SysEx is the whole point
     let output = MidiOutput::new(APP_NAME).ok()?;
-    // An FM-1 that names itself first (Open firmware), then one that doesn't (the original).
     let ports = input.ports();
-    // USB before Bluetooth; one that names itself (Open firmware) before the original's "USB Composite".
-    let usb = |p: &&midir::MidiInputPort| input.port_name(p).is_ok_and(|n| is_fm1(&n) && !is_bluetooth(&n));
-    let named = |p: &&midir::MidiInputPort| usb(p) && input.port_name(p).is_ok_and(|n| !n.to_lowercase().contains("usb composite"));
-    let in_port = ports
-        .iter()
-        .find(named)
-        .or_else(|| ports.iter().find(usb))
-        .or_else(|| ports.iter().find(|p| input.port_name(p).is_ok_and(|n| is_fm1(&n))))?;
-    let name = input.port_name(in_port).ok()?;
+    let in_port = ports.iter().find(|p| input.port_name(p).is_ok_and(|n| n == name))?;
+    let name = name.to_string();
     let out_port = output.ports().into_iter().find(|p| output.port_name(p).is_ok_and(|n| n == name))?;
     let output = Arc::new(Mutex::new(output.connect(&out_port, "FM-1 Big Screen out").ok()?));
+    let fb: Arc<fm1base::State> = Arc::default();       // a new link: which mirror it speaks, found again
+    let fb_in = fb.clone();
     let mut parser = keys::Parser::default();
-    fm1base::ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed); // a new link: which mirror it speaks, found again
-    fm1base::LAST_SEQ.store(256, std::sync::atomic::Ordering::Relaxed);
     {
         let mut s = shared.lock().unwrap();
         s.lights = None; // and its lights: the last firmware's are not this one's
         s.screen_since = None;
     }
-    *fm1base::PANEL.lock().unwrap() = fm1base::Remote::default();
     let base: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let base_in = base.clone();
     let v2_answers: Arc<std::sync::atomic::AtomicU32> = Arc::default();
@@ -1618,10 +1775,10 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                     ctx.request_repaint();
                 }
                 // Charles Vestal's mirror (fm1-base firmware): its answer, and its rectangles and fills.
-                match fm1base::apply(&mut s.screen, m) {
+                match fm1base::apply(&mut s.screen, m, &fb_in) {
                     fm1base::Got::Hello => {
                         base_in.store(true, std::sync::atomic::Ordering::Relaxed);
-                        fm1base::ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+                        fb_in.active.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                     fm1base::Got::Lights(l) => {
                         if s.lights != Some(l) {
@@ -1629,7 +1786,7 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
                             ctx.request_repaint();
                         }
                     }
-                    fm1base::Got::Answered => fm1base::PANEL.lock().unwrap().answered(),
+                    fm1base::Got::Answered => fb_in.panel.lock().unwrap().answered(),
                     fm1base::Got::Painted => {
                         s.last = Some(Instant::now());
                         s.changed = true;
@@ -1645,11 +1802,71 @@ fn open(shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>, ctx: egui:
     let stop: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let lost: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let (st, lo, out) = (stop.clone(), lost.clone(), output.clone());
-    std::thread::spawn(move || hellos(out, st, lo, base, v2_answers));
-    Some(Link { name, _input: input, out: output, opened: Instant::now(), stop, lost })
+    let fb_h = fb.clone();
+    std::thread::spawn(move || hellos(out, st, lo, base, v2_answers, fb_h));
+    Some(Link { name, _input: input, out: output, opened: Instant::now(), stop, lost, fb })
 }
 
 impl App {
+    /// Every FM-1's screen at once, in a row (or a grid when there are many), the one picked framed in yellow. Click one
+    /// to work with it. The spyglass floats over them as usual.
+    fn side_by_side_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, area: Rect) {
+        let units = self.units_in_order();
+        let n = units.len().max(1);
+        // as many columns as make each screen biggest
+        let (mut cols, mut best) = (1, 0.0f32);
+        for c in 1..=n {
+            let rows = n.div_ceil(c);
+            let side = (area.width() / c as f32).min((area.height() - 34.0 * rows as f32) / rows as f32);
+            if side > best {
+                (cols, best) = (c, side);
+            }
+        }
+        let rows = n.div_ceil(cols);
+        let cell = vec2(area.width() / cols as f32, area.height() / rows as f32);
+        let mut pick: Option<usize> = None;
+        for (k, (port, selected, other)) in units.iter().enumerate() {
+            let at = area.min + vec2((k % cols) as f32 * cell.x, (k / cols) as f32 * cell.y);
+            let r = Rect::from_min_size(at, cell).shrink(6.0);
+            let (shared, tex) = match other {
+                Some(i) => (self.others[*i].shared.clone(), self.others[*i].texture.clone()),
+                None => (self.shared.clone(), self.texture.clone()),
+            };
+            let name = Self::unit_name(k + 1, &shared, port);
+            let screen = fit(Rect::from_min_max(r.min + vec2(0.0, 34.0), r.max));
+            let label = Rect::from_min_size(Pos2::new(r.left(), screen.top() - 34.0), vec2(r.width(), 30.0));   // right above it
+            let p = ui.painter();
+            p.text(label.center(), Align2::CENTER_CENTER, &name, FontId::proportional(22.0),
+                if *selected { Color32::from_rgb(255, 210, 31) } else { Color32::from_gray(200) });
+            match &tex {
+                Some(t) if self.mirror_on => {
+                    p.image(t.id(), screen, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                }
+                _ => {
+                    p.text(screen.center(), Align2::CENTER_CENTER, "…", FontId::proportional(40.0), Color32::WHITE);
+                }
+            }
+            if *selected {
+                p.rect_stroke(screen.expand(4.0), 6.0, egui::Stroke::new(4.0_f32, Color32::from_rgb(255, 210, 31)), egui::StrokeKind::Outside);
+            }
+            let resp = ui.interact(screen.union(label), ui.id().with(("unit", k)), egui::Sense::click());
+            if !*selected {
+                if resp.hovered() {
+                    ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if resp.on_hover_text("Click to work with this FM-1").clicked() {
+                    pick = *other;
+                }
+            }
+        }
+        if let Some(i) = pick {
+            self.select(i);
+        }
+        if self.glass_on && !self.glass_float {
+            self.spyglass(ui, ctx, area);
+        }
+    }
+
     /// The spyglass over the screen area: the first time in the room beside the FM-1's (square,
     /// centred) screen if there's enough, else top right over it. Drag to move; drag the grip or scroll to resize.
     fn spyglass(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, area: Rect) {
@@ -1895,53 +2112,49 @@ impl eframe::App for App {
                 });
         }
         if self.knobs_on && !showing_help && !stale {
-            let out = self.link.as_ref().map(|l| l.out.clone());
+            let link = self.link.as_ref();
             let knobs = &mut self.knobs;
             egui::TopBottomPanel::bottom("knobs").exact_height(130.0).show_separator_line(false)
                 .frame(egui::Frame::new().fill(Color32::from_gray(18)).inner_margin(egui::Margin::same(6)))
                 .show(ctx, |ui| knobs::knobs_ui(ui, knobs, &mut |m| {
-                    let Some(o) = &out else { return };
-                    if fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
-                        // Charles Vestal's fm1-base mirror: its own remote, one command at a time (fm1base.rs)
-                        let mut panel = fm1base::PANEL.lock().unwrap();
-                        match m.get(4) {
-                            Some(4) => panel.turn(m[5], if m[6] >= 64 { m[6] as i32 - 128 } else { m[6] as i32 }),
-                            Some(6) => panel.master(m[5] as u16 | (m[6] as u16) << 7),
-                            _ => {}
-                        }
-                        if let Some(f) = panel.next() {
-                            let _ = o.lock().unwrap().send(&f);
-                        }
-                    } else {
-                        let _ = o.lock().unwrap().send(m);
-                    }
+                    let Some(l) = link else { return };
+                    // Charles Vestal's fm1-base mirror: its own remote, one command at a time (fm1base.rs)
+                    l.send_remote(m, |panel| match m.get(4) {
+                        Some(4) => panel.turn(m[5], if m[6] >= 64 { m[6] as i32 - 128 } else { m[6] as i32 }),
+                        Some(6) => panel.master(m[5] as u16 | (m[6] as u16) << 7),
+                        _ => {}
+                    });
                 }));
         }
         if self.lights_on && !showing_help && !stale {
             let played = self.played.lock().unwrap().keys_down();
-            let out = self.link.as_ref().map(|l| l.out.clone());
+            let link = self.link.as_ref();
             let held = &mut self.panel_held;
             let got = self.shared.lock().unwrap().lights;
             let (l, seen) = (got.unwrap_or_default(), got.is_some());
             egui::TopBottomPanel::bottom("lights").exact_height(150.0).show_separator_line(false)
                 .frame(egui::Frame::new().fill(Color32::from_gray(12)).inner_margin(egui::Margin::same(6)))
                 .show(ctx, |ui| knobs::lights_ui(ui, l, knobs::played_keys(&played), seen, held, &mut |id, down| {
-                    let Some(o) = &out else { return };
-                    if fm1base::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
-                        let mut panel = fm1base::PANEL.lock().unwrap();
-                        panel.press(id, down);
-                        if let Some(f) = panel.next() {
-                            let _ = o.lock().unwrap().send(&f);
-                        }
-                    } else {
-                        let _ = o.lock().unwrap().send(&knobs::press(id, down));
-                    }
+                    let Some(lk) = link else { return };
+                    lk.send_remote(&knobs::press(id, down), |p| p.press(id, down));
                 }));
         }
+        if self.multi_install_note.is_some_and(|t| t.elapsed() < Duration::from_secs(12)) {
+            egui::TopBottomPanel::top("multi_install").show_separator_line(false)
+                .frame(egui::Frame::new().fill(Color32::from_gray(18)).inner_margin(egui::Margin::same(12)))
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("To install firmware, leave just that one FM-1 plugged in: with several, it could go to the wrong one.")
+                        .size(22.0).strong().color(Color32::from_rgb(255, 210, 31)));
+                });
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+        let side_by_side = self.side_by_side && !self.others.is_empty() && !showing_help;
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::BLACK)).show(ctx, |ui| {
             let area = ui.max_rect();
             let p = ui.painter();
-            if showing_help {
+            if side_by_side {
+                self.side_by_side_ui(ui, ctx, area);
+            } else if showing_help {
                 let need = need.unwrap_or(Need::Connecting);
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(area.shrink2(vec2(40.0, 10.0))), |ui| self.need_panel(ui, need));
             } else if spyglass_alone {
