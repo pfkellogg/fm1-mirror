@@ -515,7 +515,10 @@ impl App {
             mirror_on: saved["mirror"].as_bool().unwrap_or(true),
             smooth_on: true, // always on at start (S or the button turns it off for this session)
             mellotron: None,
-            mellotron_sound: saved["mellotron"].as_str().filter(|s| mellotron::installed().iter().any(|i| i == s)).unwrap_or("").to_string(),
+            mellotron_sound: {
+                let have = mellotron::installed();
+                saved["mellotron"].as_str().unwrap_or("").split(',').filter(|s| have.iter().any(|i| i == s)).collect::<Vec<_>>().join(",")
+            },
             fm1_with_mellotron: saved["fm1_with_mellotron"].as_bool().unwrap_or(true),
             last_firmware: saved["last_firmware"].as_str().unwrap_or("").to_string(),
             firmware_checked: false,
@@ -701,6 +704,21 @@ impl App {
         self.set_mellotron(next);
     }
 
+    /// The sounds picked to play together (mellotron_sound holds them joined with commas).
+    fn picked(&self) -> Vec<String> {
+        self.mellotron_sound.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect()
+    }
+
+    /// Adds a sound to what plays, or takes it away.
+    fn toggle_sound(&mut self, id: &str, on: bool) {
+        let mut p = self.picked();
+        p.retain(|s| s != id);
+        if on {
+            p.push(id.to_string());
+        }
+        self.set_mellotron(p.join(","));
+    }
+
     fn set_mellotron(&mut self, sound: String) {
         self.mellotron = None;                 // (dropping it stops the sound)
         self.mellotron_sound = sound;
@@ -719,7 +737,6 @@ impl App {
     }
 
     /// A light with its name: green and bright when lit, dark when not. Clickable.
-    #[allow(dead_code)] // (the FM-1 / Mellotron lights: now "Hear the FM-1 too" in the Sound menu)
     fn led(ui: &mut egui::Ui, lit: bool, name: &str) -> egui::Response {
         let font = egui::TextStyle::Button.resolve(ui.style());
         let text_color = if lit { Color32::WHITE } else { Color32::from_gray(120) };
@@ -803,7 +820,7 @@ impl App {
         }
         let ready = self.sounds_ready.lock().unwrap().take();
         if let Some(id) = ready {
-            self.set_mellotron(id);            // a sound just downloaded: play it straight away
+            self.toggle_sound(&id, true);      // a sound just downloaded: it plays straight away (with any others on)
         }
         if !self.sounds_open {
             return;
@@ -812,10 +829,13 @@ impl App {
         let list = self.sounds_list.lock().unwrap().clone();
         let note = self.sounds_note.lock().unwrap().clone();
         let mut remove: Option<String> = None;
-        egui::Window::new("Rich sounds").open(&mut open).collapsible(false).resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
+        // always inside the app's window, its ✕ in sight: a long list scrolls inside it
+        let room = ctx.screen_rect().shrink(20.0);
+        egui::Window::new("Get sounds").open(&mut open).collapsible(false).resizable(false).constrain(true)
+            .max_width(room.width().min(860.0)).max_height(room.height() - 40.0).vscroll(true)
+            .anchor(egui::Align2::CENTER_TOP, vec2(0.0, 20.0)).show(ctx, |ui| {
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Heading);
-                ui.label("The two lights beside the Mellotron button show what you hear (FM-1, Mellotron): click one to switch it.");
+                ui.label("Download the sounds you want, then pick them in the Sound menu: tick one or several to play them together. The lights in the bar show what you hear.");
                 ui.separator();
                 match &list {
                     None => {
@@ -936,18 +956,11 @@ impl App {
                     ui.label(n);
                 }
             });
-        if remove.as_deref() == Some(rich::ID) {
-            if self.mellotron_sound == rich::ID {
-                self.set_mellotron(String::new());
-            }
-            rich::remove();
-            remove = None;
-        }
         if let Some(id) = remove {
-            if self.mellotron_sound == id {
-                self.set_mellotron(String::new());
+            if self.picked().contains(&id) {
+                self.toggle_sound(&id, false);
             }
-            mellotron::remove(&id);
+            if id == rich::ID { rich::remove() } else { mellotron::remove(&id) }
         }
         if !open {
             self.sounds_open = false;
@@ -1276,60 +1289,109 @@ impl App {
             if ui.add_sized([w, h], egui::SelectableLabel::new(self.smooth_on, if self.smooth_on { "Smooth: on" } else { "Smooth: off" })).clicked() {
                 self.toggle_smooth();
             }
-            // One Sound menu (it replaces the Mellotron button, the lights, Sounds… and Sweeten): what you hear, in one click
+            // One Sound menu: what you hear. FM-1 only, or tick one or several sounds (grouped by family) to play together
             let installed = mellotron::installed();
-            let name_of = |id: &str| if id == rich::ID { "Rich sounds".to_string() } else { format!("Mellotron {}", mellotron::pretty(id)) };
-            let shown = if self.mellotron_sound.is_empty() && self.new_firmware_at.is_some_and(|t| t.elapsed() < Duration::from_secs(15)) {
+            let picked = self.picked();
+            let names: Vec<String> = picked.iter().map(|id| mellotron::pretty(id)).collect();
+            let shown = if picked.is_empty() && self.new_firmware_at.is_some_and(|t| t.elapsed() < Duration::from_secs(15)) {
                 "New firmware: Sound FM-1 only".to_string()   // (a flash turned the app's sound off: on again here)
-            } else if self.mellotron_sound.is_empty() {
+            } else if picked.is_empty() {
                 "Sound: FM-1 only".to_string()
-            } else if self.mellotron_sound == rich::ID {
-                let p = rich::program();
-                format!("Sound: Rich · {}", rich::GM[p as usize])
+            } else if picked.len() <= 2 {
+                format!("Sound: {}", names.join(" + "))
             } else {
-                format!("Sound: Mellotron {}", mellotron::pretty(&self.mellotron_sound))
+                format!("Sound: {} sounds", picked.len())
             };
-            let mut choose: Option<String> = None;
+            let mut toggles: Vec<(String, bool)> = Vec::new();
+            let mut only_fm1 = false;
             let (mut hear_fm1, mut sweeten_now, mut more) = (self.fm1_with_mellotron, self.sweeten, false);
             let mut new_pick = *rich::PICK.lock().unwrap();
             let pick_before = new_pick;
             let sw = Self::width_for(ui, &[shown.as_str()]);
             Self::fit(ui, Self::combo_w(ui, sw));
-            egui::ComboBox::from_id_salt("sound").selected_text(shown).width(sw).height(560.0).show_ui(ui, |ui| {
-                if ui.selectable_label(self.mellotron_sound.is_empty(), "FM-1 only").clicked() {
-                    choose = Some(String::new());
+            egui::ComboBox::from_id_salt("sound").selected_text(shown).width(sw).height(620.0)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show_ui(ui, |ui| {
+                ui.set_min_width(260.0);
+                if ui.selectable_label(picked.is_empty(), "FM-1 only (no sounds from this computer)").clicked() {
+                    only_fm1 = true;
                 }
-                for id in &installed {
-                    if ui.selectable_label(self.mellotron_sound == *id, name_of(id)).clicked() {
-                        choose = Some(id.clone());
+                let mut check = |ui: &mut egui::Ui, id: &str| {
+                    let mut on = picked.iter().any(|p| p == id);
+                    if ui.checkbox(&mut on, mellotron::pretty(id)).changed() {
+                        toggles.push((id.to_string(), on));
+                    }
+                };
+                let mut shown_ids: Vec<&str> = Vec::new();
+                for (group, ids) in mellotron::GROUPS {
+                    let have: Vec<&str> = ids.iter().copied().filter(|id| installed.iter().any(|i| i == id)).collect();
+                    if have.is_empty() {
+                        continue;
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new(*group).strong().color(Color32::from_rgb(255, 210, 31)));
+                    for id in have {
+                        check(ui, id);
+                        shown_ids.push(id);
+                    }
+                }
+                let others: Vec<&String> = installed.iter().filter(|i| i.as_str() != rich::ID && !shown_ids.contains(&i.as_str())).collect();
+                if !others.is_empty() {
+                    ui.separator();
+                    ui.label(egui::RichText::new("More").strong().color(Color32::from_rgb(255, 210, 31)));
+                    for id in others {
+                        check(ui, id);
+                    }
+                }
+                if installed.iter().any(|i| i == rich::ID) {
+                    ui.separator();
+                    ui.label(egui::RichText::new("Rich (follows the FM-1's sound)").strong().color(Color32::from_rgb(255, 210, 31)));
+                    check(ui, rich::ID);
+                    if picked.iter().any(|p| p == rich::ID) {
+                        let auto_p = rich::program_for(&rich::FM1_SOUND.lock().unwrap());
+                        egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                            ui.selectable_value(&mut new_pick, None, format!("Auto · {} (follows the FM-1)", rich::GM[auto_p as usize]));
+                            for (i, n) in rich::GM.iter().enumerate() {
+                                ui.selectable_value(&mut new_pick, Some(i as u8), *n);
+                            }
+                        });
                     }
                 }
                 if installed.is_empty() {
                     ui.label("No sounds yet: Get sounds… below");
                 }
                 ui.separator();
-                ui.add_enabled(!self.mellotron_sound.is_empty(), egui::Checkbox::new(&mut hear_fm1, "Hear the FM-1 too"))
-                    .on_hover_text("On: the FM-1's own sound as well as the rich one. Off: only the rich one");
-                ui.add_enabled(!self.mellotron_sound.is_empty(), egui::Checkbox::new(&mut sweeten_now, "Sweeten"))
+                ui.add_enabled(!picked.is_empty(), egui::Checkbox::new(&mut hear_fm1, "Hear the FM-1 too"))
+                    .on_hover_text("On: the FM-1's own sound as well. Off: only the sounds ticked above");
+                ui.add_enabled(!picked.is_empty(), egui::Checkbox::new(&mut sweeten_now, "Sweeten"))
                     .on_hover_text("As a good stereo makes it: a little warmth and air, soft saturation, stereo width and a small room");
-                if self.mellotron_sound == rich::ID {
-                    ui.separator();
-                    ui.label("Rich's instrument:");
-                    let auto_p = rich::program_for(&rich::FM1_SOUND.lock().unwrap());
-                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                        ui.selectable_value(&mut new_pick, None, format!("Auto · {} (follows the FM-1)", rich::GM[auto_p as usize]));
-                        for (i, n) in rich::GM.iter().enumerate() {
-                            ui.selectable_value(&mut new_pick, Some(i as u8), *n);
-                        }
-                    });
-                }
                 ui.separator();
                 if ui.button("Get sounds…").clicked() {
                     more = true;
+                    ui.close_menu();
                 }
-            }).response.on_hover_text("What you hear: the FM-1 alone, or a rich sound from this computer as you play it");
-            if let Some(id) = choose {
-                self.set_mellotron(id);
+            }).response.on_hover_text("What you hear: the FM-1 alone, or one or several sounds from this computer as you play");
+            if only_fm1 {
+                self.set_mellotron(String::new());
+            }
+            for (id, on) in toggles {
+                self.toggle_sound(&id, on);
+            }
+            // the lights: one small green light for each sound you hear (the FM-1's own too); click one to turn it off
+            let mut lights: Vec<(String, String)> = Vec::new();
+            if picked.is_empty() || self.fm1_with_mellotron {
+                lights.push(("fm1".into(), "FM-1".into()));
+            }
+            for (id, n) in picked.iter().zip(&names) {
+                lights.push((id.clone(), n.clone()));
+            }
+            for (id, n) in lights {
+                let r = Self::led(ui, true, &n);
+                if id == "fm1" {
+                    r.on_hover_text(if picked.is_empty() { "You hear the FM-1's own sound" } else { "You hear the FM-1's own sound too (click: only the sounds from this computer)" })
+                        .clicked().then(|| if !picked.is_empty() { hear_fm1 = false; });
+                } else if r.on_hover_text(format!("You hear {n} (click to turn it off)")).clicked() {
+                    self.toggle_sound(&id, false);
+                }
             }
             if hear_fm1 != self.fm1_with_mellotron {
                 self.fm1_with_mellotron = hear_fm1;

@@ -349,8 +349,23 @@ fn install_zip(id: &str, zip: Vec<u8>, folder: Option<&str>) -> Result<usize, St
     Ok(n)
 }
 
-/// A sound's name as people read it: "shakuhachi" -> "Shakuhachi".
+/// The Sound menu's families, in order (a sound not in them goes under "More").
+pub const GROUPS: &[(&str, &[&str])] = &[
+    ("Keys", &["piano", "vibraphone", "accordion"]),
+    ("Strings and voices", &["strings", "violin", "choir", "sitar"]),
+    ("Brass", &["trumpet", "flugelhorn", "brass", "frenchhorn"]),
+    ("Woodwinds", &["flute", "shakuhachi", "altosax", "clarinet", "oboe", "harmonica"]),
+];
+
+/// A sound's name as people read it: "shakuhachi" -> "Shakuhachi", "altosax" -> "Alto Sax".
 pub fn pretty(id: &str) -> String {
+    match id {
+        "piano" => return "Grand Piano".into(),
+        "altosax" => return "Alto Sax".into(),
+        "frenchhorn" => return "French Horn".into(),
+        "rich" => return "Rich".into(),
+        _ => {}
+    }
     let mut c = id.chars();
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default().replace(['-', '_'], " ")
 }
@@ -448,6 +463,8 @@ struct Voice {
     pos: f64,
     env: f32,
     released: bool,
+    /// its layer's share when several sounds play together (1 / sqrt(layers))
+    gain: f32,
 }
 
 /// One source's running status (each source has its own: bytes of two sources mixed would make up notes).
@@ -459,8 +476,12 @@ struct Parser {
 }
 
 struct Engine {
+    /// the sounds playing, joined with commas ("brass,choir")
     sound: String,
-    strips: Option<Set>,
+    /// each strip sound's strips, as they finish loading
+    layers: Vec<Set>,
+    /// how many sounds play together (strip sounds and Rich): each layer's share is 1 / sqrt(this)
+    count: usize,
     voices: Vec<Voice>,
     fm1: Parser,
     keys: Parser,
@@ -526,23 +547,24 @@ impl Engine {
     fn note_on(&mut self, note: u8, vel: u8) {
         if let Some(r) = &mut self.rich {
             r.note_on(note, vel);                    // Rich: every key as played, with its velocity
-            return;
         }
         let key = fold(note);
-        let Some(data) = self.strips.as_ref().and_then(|s| s[key as usize].clone()) else { return };
         for v in self.voices.iter_mut().filter(|v| v.key == key) {
             v.released = true;                       // the same key again: its strip starts over
         }
-        if self.voices.len() >= VOICES {
-            self.voices.remove(0);
+        let gain = 1.0 / (self.count.max(1) as f32).sqrt();
+        let datas: Vec<Arc<Vec<i16>>> = self.layers.iter().filter_map(|s| s[key as usize].clone()).collect();
+        for data in datas {
+            if self.voices.len() >= VOICES * self.layers.len().max(1) {
+                self.voices.remove(0);
+            }
+            self.voices.push(Voice { key, data, pos: 0.0, env: 0.0, released: false, gain });
         }
-        self.voices.push(Voice { key, data, pos: 0.0, env: 0.0, released: false });
     }
 
     fn note_off(&mut self, note: u8) {
         if let Some(r) = &mut self.rich {
             r.note_off(note);
-            return;
         }
         let key = fold(note);
         for v in self.voices.iter_mut().filter(|v| v.key == key) {
@@ -553,17 +575,6 @@ impl Engine {
     /// `out` mono at `rate`: the strips (44.1 kHz) stepped to it, a 4 ms start, 0.12 s fade when let go, headroom for
     /// chords and only squeezed near the top (Android 1.6.9's fixes).
     fn mix(&mut self, out: &mut [f32], rate: f32) {
-        if let Some(r) = &mut self.rich {
-            r.render(out);                           // Rich: the SoundFont's own level, squeezed only near the top
-            let mut loud = 0.0f32;
-            for s in out.iter_mut() {
-                let a = s.abs();
-                *s = if a > 0.8 { s.signum() * (0.8 + 0.2 * ((a - 0.8) / 0.2).tanh()) } else { *s };
-                loud = loud.max(s.abs());
-            }
-            self.ring.take(out, rate, loud > 0.002);
-            return;
-        }
         out.iter_mut().for_each(|s| *s = 0.0);
         let step = RATE / rate as f64;
         let attack = 1.0 / (0.004 * rate);
@@ -587,18 +598,28 @@ impl Engine {
                 }
                 let f = (pos - p as f64) as f32;
                 let a = d[p] as f32;
-                *o += (a + (d[p + 1] as f32 - a) * f) * env;
+                *o += (a + (d[p + 1] as f32 - a) * f) * env * v.gain;
                 pos += step;
             }
             v.pos = pos;
             v.env = env;
             true
         });
+        out.iter_mut().for_each(|s| *s *= 0.3 / 32768.0);
+        // Rich (GeneralUser GS) as one more layer, at its own level
+        let knee = if self.layers.is_empty() { 0.8 } else { 0.6 };
+        if let Some(r) = &mut self.rich {
+            let mut tmp = vec![0.0f32; out.len()];
+            r.render(&mut tmp);
+            let g = 1.0 / (self.count.max(1) as f32).sqrt();
+            out.iter_mut().zip(&tmp).for_each(|(o, t)| *o += t * g);
+        }
+        // squeezed only near the top
         let mut loud = 0.0f32;
         for s in out.iter_mut() {
-            let x = *s * 0.3 / 32768.0;
+            let x = *s;
             let a = x.abs();
-            *s = if a > 0.6 { x.signum() * (0.6 + 0.4 * ((a - 0.6) / 0.4).tanh()) } else { x };
+            *s = if a > knee { x.signum() * (knee + (1.0 - knee) * ((a - knee) / (1.0 - knee)).tanh()) } else { x };
             loud = loud.max(s.abs());
         }
         self.ring.take(out, rate, loud > 0.002);
@@ -645,22 +666,25 @@ fn output() -> Option<cpal::Device> {
 }
 
 impl Mellotron {
-    /// Starts `sound` (one of SOUNDS): its strips load on a thread of their own (from the cache when used before).
+    /// Starts `sound`: one sound, or several joined with commas ("brass,choir", Rich among them) playing together.
+    /// Their strips load on a thread of their own (from the cache when used before).
     pub fn start(sound: &str) -> Option<Mellotron> {
         let device = output()?;
         let config = device.default_output_config().ok()?;
         let (rate, channels) = (config.sample_rate().0 as f32, config.channels() as usize);
-        let engine = Arc::new(Mutex::new(Engine { sound: sound.to_string(), strips: None, voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None }));
+        let engine = Arc::new(Mutex::new(Engine { sound: sound.to_string(), layers: Vec::new(), count: sound.split(',').filter(|n| !n.is_empty()).count(), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None }));
         let e = engine.clone();
-        let name = sound.to_string();
+        let names: Vec<String> = sound.split(',').filter(|n| !n.is_empty()).map(|n| n.to_string()).collect();
         std::thread::spawn(move || {
-            if name == crate::rich::ID {
-                let r = crate::rich::Rich::new(rate as u32);       // (the SoundFont read once: ~1 s the first time)
-                e.lock().unwrap().rich = r;
-                return;
+            for name in names {
+                if name == crate::rich::ID {
+                    let r = crate::rich::Rich::new(rate as u32);   // (the SoundFont read once: ~1 s the first time)
+                    e.lock().unwrap().rich = r;
+                } else {
+                    let s = strips(&name);
+                    e.lock().unwrap().layers.push(s);
+                }
             }
-            let s = strips(&name);
-            e.lock().unwrap().strips = Some(s);
         });
         let e = engine.clone();
         let mut mono = Vec::new();
@@ -747,10 +771,10 @@ pub fn feed_keys(name: &str, m: &[u8]) {
 pub fn label() -> Option<String> {
     let e = current().lock().unwrap().clone()?;
     let en = e.lock().unwrap();
-    if en.sound == crate::rich::ID {
-        return Some(format!("{} \u{203A} Rich {}", en.player, crate::rich::GM[crate::rich::program() as usize]));
-    }
-    Some(format!("{} \u{203A} Mellotron {}", en.player, en.sound))
+    let names: Vec<String> = en.sound.split(',').filter(|n| !n.is_empty()).map(|n| {
+        if n == crate::rich::ID { format!("Rich {}", crate::rich::GM[crate::rich::program() as usize]) } else { pretty(n) }
+    }).collect();
+    Some(format!("{} \u{203A} {}", en.player, names.join(" + ")))
 }
 
 /// For the spyglass: the Mellotron's real sound while it plays.
@@ -787,7 +811,7 @@ mod tests {
 
     #[test]
     fn screen_sysex_between_notes_makes_no_notes() {
-        let mut e = Engine { sound: "flute".into(), strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None };
+        let mut e = Engine { sound: "flute".into(), layers: vec![strips("flute")], count: 1, voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None };
         // a note, then a screen message whose data looks like notes, then the note let go
         e.parse(&[0x90, 60, 100]);
         e.parse(&[0xf0, 0x7d, 0x46, 0x53, 0x01, 60, 0, 61, 100, 62]);
@@ -800,7 +824,7 @@ mod tests {
 
     #[test]
     fn a_keyboard_and_the_fm1_dont_mix_their_bytes() {
-        let mut e = Engine { sound: "flute".into(), strips: Some(strips("flute")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None };
+        let mut e = Engine { sound: "flute".into(), layers: vec![strips("flute")], count: 1, voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None };
         e.parse_from(false, &[0xf0, 0x7d, 0x46]);     // the FM-1 is in the middle of a screen message
         e.parse_from(true, &[0x90, 64, 90]);         // a keyboard key
         e.parse_from(false, &[61, 100, 62, 0xf7]);   // the rest of the screen message: no notes
@@ -810,7 +834,7 @@ mod tests {
 
     #[test]
     fn a_chord_stays_clean() {
-        let mut e = Engine { sound: "strings".into(), strips: Some(strips("strings")), voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None };
+        let mut e = Engine { sound: "strings".into(), layers: vec![strips("strings")], count: 1, voices: Vec::new(), fm1: Parser::default(), keys: Parser::default(), player: "FM-1".to_string(), ring: Default::default(), rich: None };
         e.parse(&[0x90, 48, 100, 0x90, 52, 100, 0x90, 55, 100, 0x90, 60, 100]);
         let mut out = vec![0.0f32; 48000];
         e.mix(&mut out, 48000.0);
