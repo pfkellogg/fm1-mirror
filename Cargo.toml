@@ -6,7 +6,7 @@ description = "Shows the M-VAVE FM-1's screen big, sent over USB by the FM-1 Big
 
 [features]
 # "full": the Mellotron's flute, strings and choir built in; `--no-default-features` builds "lite", which can download them.
-default = ["bundled-sounds"]
+default = ["bundled-sounds", "debugger"]   # the debugger branch: the MIDI debugger is on
 bundled-sounds = []
 # The MIDI debugger (src/debugui.rs): off in the normal app; on in the "debugger" branch's builds and in
 # DEBUGGER=1 / `--features debugger` builds ("FM-1 Big Screen Debugger").
