@@ -10,6 +10,8 @@
 
 mod bigscreen2;
 mod chord;
+mod debug;
+mod debugui;
 mod fm1base;
 mod glass;
 mod glyphs;
@@ -242,9 +244,11 @@ impl Link {
             let mut panel = self.fb.panel.lock().unwrap();
             remote(&mut panel);
             if let Some(f) = panel.next() {
-                let _ = self.out.lock().unwrap().send(&f);
+                if debug::check(&self.name, debug::Dir::Out, &f, "app window", false) {
+                    let _ = self.out.lock().unwrap().send(&f);
+                }
             }
-        } else {
+        } else if debug::check(&self.name, debug::Dir::Out, plain, "app window", false) {
             let _ = self.out.lock().unwrap().send(plain);
         }
     }
@@ -264,6 +268,7 @@ impl Drop for Link {
 /// Also asks the other way, Charles Vestal's mirror in fm1-base firmware (fm1base.rs): three times, between the other
 /// questions; once it answers (`base`, set by the input), it's kept on every two seconds (it stops after six).
 fn hellos(
+    port: String,
     output: Arc<Mutex<MidiOutputConnection>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
     lost: Arc<std::sync::atomic::AtomicBool>,
@@ -272,6 +277,10 @@ fn hellos(
     fb: Arc<fm1base::State>,
 ) {
     use std::sync::atomic::Ordering;
+    // every message this thread sends goes past the debugger first (a breakpoint stops this thread right here)
+    let send = |m: &[u8]| -> Result<(), midir::SendError> {
+        if debug::check(&port, debug::Dir::Out, m, "hello thread", true) { output.lock().unwrap().send(m) } else { Ok(()) }
+    };
     const BASE_ASK_AT: [u64; 3] = [1000, 5000, 6000]; // ms after opening: clear of the questions at 2, 3 and 4 s
     let opened = Instant::now();
     let (mut base_asked, mut base_at, mut missed_at) = (0usize, Instant::now(), Instant::now());
@@ -293,43 +302,43 @@ fn hellos(
         if hello_at.is_none_or(|t| t.elapsed() >= asker.every(HELLO_EVERY)) {
             hello_at = Some(Instant::now());
             let hello = asker.next(v2_answers.load(Ordering::Relaxed));
-            if output.lock().unwrap().send(&hello).is_err() {
+            if send(&hello).is_err() {
                 lost.store(true, Ordering::Relaxed);
                 return;
             }
         }
         if !asked_identity && opened.elapsed() > Duration::from_secs(2) {
             asked_identity = true;
-            let _ = output.lock().unwrap().send(&install::frame(17, &[]));
+            let _ = send(&install::frame(17, &[]));
         }
         if !asked_build && opened.elapsed() > Duration::from_secs(3) {
             asked_build = true;
-            let _ = output.lock().unwrap().send(&install::frame(49, &[]));
+            let _ = send(&install::frame(49, &[]));
         }
         if !asked_info && opened.elapsed() > Duration::from_secs(4) {
             asked_info = true;
-            let _ = output.lock().unwrap().send(&ASK_INFO);
+            let _ = send(&ASK_INFO);
         }
         if base.load(Ordering::Relaxed) {
             // Big Knobs' turns still waiting for the last answer (fm1base.rs Remote)
             let next = fb.panel.lock().unwrap().next();
             if let Some(f) = next {
-                let _ = output.lock().unwrap().send(&f);
+                let _ = send(&f);
             }
             if fb.missed.load(Ordering::Relaxed) && missed_at.elapsed() >= Duration::from_millis(700) {
                 // a frame went missing on the way: the whole screen again (what the viewer has is skipped)
                 fb.missed.store(false, Ordering::Relaxed);
                 missed_at = Instant::now();
                 base_at = Instant::now();
-                let _ = output.lock().unwrap().send(&fm1base::request(2));
+                let _ = send(&fm1base::request(2));
             } else if base_at.elapsed() >= Duration::from_secs(2) {
                 base_at = Instant::now();
-                let _ = output.lock().unwrap().send(&fm1base::request(1));
+                let _ = send(&fm1base::request(1));
             }
         } else if base_asked < BASE_ASK_AT.len() && opened.elapsed() > Duration::from_millis(BASE_ASK_AT[base_asked]) {
             base_asked += 1;
             base_at = Instant::now();
-            let _ = output.lock().unwrap().send(&fm1base::request(2)); // on, and the whole screen
+            let _ = send(&fm1base::request(2)); // on, and the whole screen
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -437,6 +446,8 @@ struct App {
     knobs_on: bool,
     lights_on: bool,
     knobs: knobs::Knobs,
+    /// The MIDI debugger's window (debugui.rs).
+    dbg: debugui::DebugUi,
     /// A Contour ShuttleXpress/ShuttlePRO as a remote (shuttle.rs): the knob it turns (0..7, knobs::NAMES), the
     /// ring's position and when it turns next, its buttons' presses, what it shows big, and if it speaks.
     shuttle: shuttle::Shuttle,
@@ -563,6 +574,7 @@ impl App {
             },
             lights_on: saved["lights"].as_bool().unwrap_or(false),
             knobs: knobs::Knobs::default(),
+            dbg: debugui::DebugUi::default(),
             shuttle: { let c = ctx.clone(); shuttle::Shuttle::start(move || c.request_repaint()) },
             sh_knob: 2,
             sh_ring: 0,
@@ -570,7 +582,7 @@ impl App {
             sh_presses: shuttle::Presses::default(),
             sh_toast: None,
             sh_turned: (2, 0, Instant::now()),
-            sh_speak: saved["shuttle_speak"].as_bool().unwrap_or(true),
+            sh_speak: saved["voice"].as_bool().unwrap_or(false),   // the Voice button: off until turned on
             sh_was: false,
             panel_held: 0,
             glass_at: saved["spyglass_x"].as_f64().zip(saved["spyglass_y"].as_f64()).map(|(x, y)| (x as f32, y as f32)),
@@ -612,13 +624,21 @@ impl App {
         };
         app.start_mellotron();   // the sound it played last time
         app.apply_fm1_light();
+        // FM1_DEBUG=1 opens the debugger at start; FM1_DEBUG=hello also stops when the firmware says hello
+        if let Ok(v) = std::env::var("FM1_DEBUG") {
+            app.dbg.open = true;
+            debug::set_on(true, ctx);
+            if v.contains("hello") {
+                debug::with_breakpoints(|b| b.push(debug::Breakpoint::new(debug::What::SaysHello)));
+            }
+        }
         app
     }
 
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap(), "last_firmware": self.last_firmware, "side_by_side": self.side_by_side, "fm1_port": self.port, "locked": self.locked, "shuttle_speak": self.sh_speak });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap(), "last_firmware": self.last_firmware, "side_by_side": self.side_by_side, "fm1_port": self.port, "locked": self.locked, "voice": self.sh_speak });
         if let Some(at) = self.main_at {
             s["window_x"] = json!(at.x);
             s["window_y"] = json!(at.y);
@@ -760,6 +780,16 @@ impl App {
     // ---- the Contour Shuttle (shuttle.rs): turn knobs with a dial; everything shown big and said out loud ----
 
     /// Shows `show` big for a moment, and says `speak` (if speech is on).
+    /// The Voice button (and holding Shuttle button 2): the spoken words on or off. Kept as a setting.
+    fn toggle_voice(&mut self) {
+        self.sh_speak = !self.sh_speak;
+        self.store();
+        self.sh_toast = Some((if self.sh_speak { "Voice on" } else { "Voice off" }.into(), Instant::now()));
+        if self.sh_speak {
+            shuttle::say("Voice on");
+        }
+    }
+
     fn sh_say(&mut self, show: String, speak: &str) {
         self.sh_toast = Some((show, Instant::now()));
         if self.sh_speak {
@@ -874,12 +904,7 @@ impl App {
                 let (shown, said) = self.sh_status();
                 self.sh_say(shown, &said);
             }
-            2 => {
-                self.sh_speak = !self.sh_speak;
-                self.store();
-                self.sh_toast = Some((if self.sh_speak { "Speech on" } else { "Speech off" }.into(), Instant::now()));
-                shuttle::say(if self.sh_speak { "Speech on" } else { "Speech off" });
-            }
+            2 => self.toggle_voice(),
             4 => {
                 if self.others.is_empty() {
                     self.sh_say("Only one FM-1".into(), "Only one F M 1");
@@ -1690,6 +1715,20 @@ impl App {
             if ui.add_sized([w, h], egui::SelectableLabel::new(self.smooth_on, if self.smooth_on { "Smooth: on" } else { "Smooth: off" })).clicked() {
                 self.toggle_smooth();
             }
+            // only while a ShuttleXpress is plugged in: it's the Shuttle's voice
+            if self.sh_was && ui.add_sized([Self::width_for(ui, &["Voice"]), h], egui::SelectableLabel::new(self.sh_speak, "Voice"))
+                .on_hover_text("Says what the Shuttle does out loud (off at first)")
+                .clicked()
+            {
+                self.toggle_voice();
+            }
+            if ui.add_sized([Self::width_for(ui, &["Debug"]), h], egui::SelectableLabel::new(self.dbg.open, "Debug"))
+                .on_hover_text("The MIDI debugger: every message to and from the FM-1, decoded, with breakpoints (⌘⇧D)")
+                .clicked()
+            {
+                self.dbg.open = !self.dbg.open;
+                debug::set_on(self.dbg.open, ctx);
+            }
             // One Sound menu: what you hear. FM-1 only, or tick one or several sounds (grouped by family) to play together
             let installed = mellotron::installed();
             let picked = self.picked();
@@ -1951,11 +1990,34 @@ fn open(name: &str, shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>
     let base_in = base.clone();
     let v2_answers: Arc<std::sync::atomic::AtomicU32> = Arc::default();
     let v2_in = v2_answers.clone();
+    let port_in = name.clone();
     let input = input
         .connect(
             in_port,
             "FM-1 Big Screen in",
-            move |_, buffer, _| {
+            move |_, raw, _| {
+                // The debugger first: a breakpoint stops this thread here, before the app has acted on the message.
+                let kept: Vec<u8>;
+                let buffer: &[u8] = if debug::is_on() {
+                    let mut keep = Vec::with_capacity(raw.len());
+                    let (mut i, mut skipped) = (0, false);
+                    while i < raw.len() {
+                        // one message: a SysEx to its F7, else a status byte and its data
+                        let end = if raw[i] == 0xF0 {
+                            raw[i..].iter().position(|&b| b == 0xF7).map_or(raw.len(), |p| i + p + 1)
+                        } else {
+                            let mut e = i + 1;
+                            while e < raw.len() && raw[e] < 0x80 { e += 1; }
+                            e
+                        };
+                        let m = &raw[i..end];
+                        if debug::check(&port_in, debug::Dir::In, m, "MIDI in", true) { keep.extend_from_slice(m) } else { skipped = true }
+                        i = end;
+                    }
+                    if skipped { kept = keep; &kept } else { raw }
+                } else {
+                    raw
+                };
                 // Notes from the FM-1's own keys (KEY OUT on), for the spyglass, and for the Mellotron when it's on.
                 mellotron::feed(buffer);
                 let before = played.lock().unwrap().note_ons;
@@ -2045,7 +2107,8 @@ fn open(name: &str, shared: Arc<Mutex<Shared>>, played: Arc<Mutex<keys::Played>>
     let lost: Arc<std::sync::atomic::AtomicBool> = Arc::default();
     let (st, lo, out) = (stop.clone(), lost.clone(), output.clone());
     let fb_h = fb.clone();
-    std::thread::spawn(move || hellos(out, st, lo, base, v2_answers, fb_h));
+    let port_h = name.clone();
+    std::thread::spawn(move || hellos(port_h, out, st, lo, base, v2_answers, fb_h));
     Some(Link { name, _input: input, out: output, opened: Instant::now(), stop, lost, fb })
 }
 
@@ -2272,6 +2335,7 @@ impl eframe::App for App {
             self.main_at = Some(r.min);
         }
         self.sounds_window(ctx);
+        self.debug_window(ctx);
         self.keep_linked(ctx);
         self.take_screen(ctx);
         let (closed, dirty) = {
