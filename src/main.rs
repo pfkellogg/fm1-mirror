@@ -632,6 +632,8 @@ impl App {
         app.apply_fm1_light();
         // FM1_DEBUG=1 opens the debugger at start; FM1_DEBUG=hello also stops when the firmware says hello
         #[cfg(feature = "debugger")]
+        debugui::set_dark(saved["debugger_dark"].as_bool().unwrap_or(false));
+        #[cfg(feature = "debugger")]
         if let Ok(v) = std::env::var("FM1_DEBUG") {
             app.dbg.open = true;
             debug::set_on(true, ctx);
@@ -646,6 +648,10 @@ impl App {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
         let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap(), "last_firmware": self.last_firmware, "side_by_side": self.side_by_side, "fm1_port": self.port, "locked": self.locked, "voice": self.sh_speak });
+        #[cfg(feature = "debugger")]
+        {
+            s["debugger_dark"] = json!(debugui::is_dark());
+        }
         if let Some(at) = self.main_at {
             s["window_x"] = json!(at.x);
             s["window_y"] = json!(at.y);
