@@ -69,11 +69,33 @@ pub struct Knobs {
     angle: [f32; 8],
     pub master: f32,
     master_sent: Option<(u16, Instant)>,
+    /// The knob a Contour Shuttle turns (shuttle.rs): ringed in yellow, so it's easy to see which.
+    pub shuttle: Option<usize>,
 }
 
 impl Default for Knobs {
     fn default() -> Self {
-        Knobs { left: [0.0; 8], angle: [0.0; 8], master: 512.0, master_sent: None }
+        Knobs { left: [0.0; 8], angle: [0.0; 8], master: 512.0, master_sent: None, shuttle: None }
+    }
+}
+
+impl Knobs {
+    /// `clicks` of knob `i` from elsewhere (the Shuttle): the message for the FM-1, and the knob drawn turned.
+    pub fn nudge(&mut self, i: usize, clicks: i32) -> [u8; 8] {
+        if i == MASTER {
+            self.master = (self.master + clicks as f32 * 16.0).clamp(0.0, 1023.0);
+            self.angle[i] = (self.master / 1023.0 - 0.5) * 270f32.to_radians();
+            let v = self.master.round() as u16;
+            self.master_sent = Some((v, Instant::now()));
+            master(v)
+        } else {
+            self.angle[i] += clicks as f32 * 18f32.to_radians();
+            turn(i as u8, clicks)
+        }
+    }
+    /// MASTER, 0..100 %, as last sent.
+    pub fn master_percent(&self) -> u32 {
+        (self.master / 1023.0 * 100.0).round() as u32
     }
 }
 
@@ -120,6 +142,9 @@ pub fn knobs_ui(ui: &mut egui::Ui, k: &mut Knobs, send: &mut dyn FnMut(&[u8])) {
         let lit = resp.hovered() || resp.dragged();
         p.circle_filled(c, r, Color32::from_gray(if lit { 70 } else { 52 }));
         p.circle_stroke(c, r, Stroke::new(2.0_f32, Color32::from_gray(110)));
+        if k.shuttle == Some(i) {
+            p.circle_stroke(c, r + 5.0, Stroke::new(4.0_f32, Color32::from_rgb(255, 214, 10)));
+        }
         let a = k.angle[i] - std::f32::consts::FRAC_PI_2;
         p.line_segment([c + vec2(a.cos(), a.sin()) * r * 0.25, c + vec2(a.cos(), a.sin()) * r * 0.9],
             Stroke::new((r * 0.12).max(3.0), Color32::from_rgb(255, 200, 90)));

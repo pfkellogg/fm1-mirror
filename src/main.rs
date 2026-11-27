@@ -19,6 +19,7 @@ mod knobs;
 mod mellotron;
 mod rich;
 mod scope;
+mod shuttle;
 mod screen;
 mod smooth;
 mod sweeten;
@@ -436,6 +437,17 @@ struct App {
     knobs_on: bool,
     lights_on: bool,
     knobs: knobs::Knobs,
+    /// A Contour ShuttleXpress/ShuttlePRO as a remote (shuttle.rs): the knob it turns (0..7, knobs::NAMES), the
+    /// ring's position and when it turns next, its buttons' presses, what it shows big, and if it speaks.
+    shuttle: shuttle::Shuttle,
+    sh_knob: usize,
+    sh_ring: i8,
+    sh_next: Instant,
+    sh_presses: shuttle::Presses,
+    sh_toast: Option<(String, Instant)>,
+    sh_turned: (usize, i32, Instant),
+    sh_speak: bool,
+    sh_was: bool,
     /// The buttons and keys held down on the Lights strip (bit id), pressing the real ones.
     panel_held: u64,
     /// The buttons' height when last shown: kept while they're hidden, so nothing moves.
@@ -551,6 +563,15 @@ impl App {
             },
             lights_on: saved["lights"].as_bool().unwrap_or(false),
             knobs: knobs::Knobs::default(),
+            shuttle: { let c = ctx.clone(); shuttle::Shuttle::start(move || c.request_repaint()) },
+            sh_knob: 2,
+            sh_ring: 0,
+            sh_next: Instant::now(),
+            sh_presses: shuttle::Presses::default(),
+            sh_toast: None,
+            sh_turned: (2, 0, Instant::now()),
+            sh_speak: saved["shuttle_speak"].as_bool().unwrap_or(true),
+            sh_was: false,
             panel_held: 0,
             glass_at: saved["spyglass_x"].as_f64().zip(saved["spyglass_y"].as_f64()).map(|(x, y)| (x as f32, y as f32)),
             glass_size: saved["spyglass_size"].as_f64().map(|d| d as f32),
@@ -597,7 +618,7 @@ impl App {
     fn store(&self) {
         let Some(path) = settings_path() else { return };
         let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap(), "last_firmware": self.last_firmware, "side_by_side": self.side_by_side, "fm1_port": self.port, "locked": self.locked });
+        let mut s = json!({ "look": self.look.key(), "keys": self.keys_choice, "keys_channel": self.keys_channel, "spyglass": self.glass_on, "mirror": self.mirror_on, "smooth": self.smooth_on, "spyglass_float": self.glass_float, "mellotron": self.mellotron_sound, "fm1_with_mellotron": self.fm1_with_mellotron, "sweeten": self.sweeten, "knobs": self.knobs_on, "lights": self.lights_on, "rich_pick": *rich::PICK.lock().unwrap(), "last_firmware": self.last_firmware, "side_by_side": self.side_by_side, "fm1_port": self.port, "locked": self.locked, "shuttle_speak": self.sh_speak });
         if let Some(at) = self.main_at {
             s["window_x"] = json!(at.x);
             s["window_y"] = json!(at.y);
@@ -723,6 +744,202 @@ impl App {
             v.extend(self.others.iter().filter_map(|u| u.link.as_ref()));
         }
         v
+    }
+
+    /// A Big Knobs message to the FM-1 picked, or every one while locked (as the Big Knobs do).
+    fn send_knob(&self, m: &[u8]) {
+        for l in self.targets() {
+            l.send_remote(m, |panel| match m.get(4) {
+                Some(4) => panel.turn(m[5], if m[6] >= 64 { m[6] as i32 - 128 } else { m[6] as i32 }),
+                Some(6) => panel.master(m[5] as u16 | (m[6] as u16) << 7),
+                _ => {}
+            });
+        }
+    }
+
+    // ---- the Contour Shuttle (shuttle.rs): turn knobs with a dial; everything shown big and said out loud ----
+
+    /// Shows `show` big for a moment, and says `speak` (if speech is on).
+    fn sh_say(&mut self, show: String, speak: &str) {
+        self.sh_toast = Some((show, Instant::now()));
+        if self.sh_speak {
+            shuttle::say(speak);
+        }
+    }
+
+    /// How a name sounds: "KNOB 1" -> "Knob 1", "FM-1" -> "F M 1".
+    fn spoken(text: &str) -> String {
+        let t = text.replace("FM-1", "F M 1").replace(" · ", ", ");
+        let mut out = String::new();
+        for w in t.split(' ') {
+            let lower = w.chars().all(|c| !c.is_lowercase()) && w.chars().filter(|c| c.is_alphabetic()).count() > 2 && w != "SLOOP";
+            if lower {
+                let l = w.to_lowercase();
+                let mut c = l.chars();
+                out += &c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+            } else {
+                out += w;
+            }
+            out.push(' ');
+        }
+        out.trim().to_string()
+    }
+
+    /// Turns the Shuttle's knob `clicks` (the dial or the ring), on the FM-1 picked or all while locked.
+    fn sh_turn(&mut self, clicks: i32) {
+        if clicks == 0 {
+            return;
+        }
+        let i = self.sh_knob;
+        let m = self.knobs.nudge(i, clicks);
+        self.send_knob(&m);
+        let (k, n, at) = self.sh_turned;
+        let n = if k == i && at.elapsed() < Duration::from_millis(1500) { n + clicks } else { clicks };
+        self.sh_turned = (i, n, Instant::now());
+        let shown = if i == 7 { format!("MASTER {}%", self.knobs.master_percent()) } else { format!("{}  {n:+}", knobs::NAMES[i]) };
+        let all = if self.locked && !self.others.is_empty() { "  ·  ALL" } else { "" };
+        self.sh_toast = Some((format!("{shown}{all}"), Instant::now())); // (not said: it would chatter while turning)
+    }
+
+    /// Where I am: "FM-1 2 of 5, SLOOP 2.8.5. Knob 1. Locked."
+    fn sh_status(&self) -> (String, String) {
+        let units = self.units_in_order();
+        let at = units.iter().position(|u| u.1).map(|p| p + 1).unwrap_or(1);
+        let name = Self::unit_name(at, &self.shared, &self.port);
+        let of = if units.len() > 1 { format!(" of {}", units.len()) } else { String::new() };
+        let knob = knobs::NAMES[self.sh_knob];
+        let lock = if units.len() > 1 { if self.locked { ". Locked" } else { ". Unlocked" } } else { "" };
+        let shown = format!("{name}{of}  ·  {knob}");
+        (shown, Self::spoken(&format!("{name}{of}. {knob}{lock}.")))
+    }
+
+    fn sh_button(&mut self, b: u8, down: bool) {
+        if b == 3 {
+            // SEL, pressed for as long as the button is held (as a finger on the FM-1's own)
+            let m = knobs::press(3, down);
+            for l in self.targets() {
+                l.send_remote(&m, |p| p.press(3, down));
+            }
+            if down {
+                self.sh_toast = Some(("SEL".into(), Instant::now()));
+            }
+            return;
+        }
+        if down {
+            self.sh_presses.down(b);
+        } else if self.sh_presses.up(b) {
+            self.sh_tap(b);
+        }
+    }
+
+    fn sh_tap(&mut self, b: u8) {
+        match b {
+            1 | 2 => {
+                self.sh_knob = (self.sh_knob + if b == 1 { 7 } else { 1 }) % 8;
+                self.knobs.shuttle = Some(self.sh_knob);
+                let name = knobs::NAMES[self.sh_knob];
+                let extra = if self.sh_knob == 7 { format!(" {}%", self.knobs.master_percent()) } else { String::new() };
+                self.sh_say(format!("{name}{extra}"), &Self::spoken(&format!("{name}{extra}")));
+            }
+            4 => {
+                let units = self.units_in_order();
+                if units.len() < 2 {
+                    self.sh_say("Only one FM-1".into(), "Only one F M 1");
+                    return;
+                }
+                let at = units.iter().position(|u| u.1).unwrap_or(0);
+                if let Some(i) = units[(at + 1) % units.len()].2 {
+                    self.select(i);
+                }
+                let (shown, said) = self.sh_status();
+                self.sh_say(shown, &said);
+            }
+            5 => {
+                if self.others.is_empty() {
+                    self.sh_say("Only one FM-1".into(), "Only one F M 1: the lock is for several");
+                    return;
+                }
+                self.locked = !self.locked;
+                self.store();
+                let (shown, said) = if self.locked { ("LOCKED: knobs move every FM-1", "Locked. Knobs move every F M 1.") } else { ("Unlocked: only the picked FM-1", "Unlocked. Only this F M 1.") };
+                self.sh_say(shown.into(), said);
+            }
+            _ => {}
+        }
+    }
+
+    fn sh_hold(&mut self, b: u8) {
+        match b {
+            1 => {
+                let (shown, said) = self.sh_status();
+                self.sh_say(shown, &said);
+            }
+            2 => {
+                self.sh_speak = !self.sh_speak;
+                self.store();
+                self.sh_toast = Some((if self.sh_speak { "Speech on" } else { "Speech off" }.into(), Instant::now()));
+                shuttle::say(if self.sh_speak { "Speech on" } else { "Speech off" });
+            }
+            4 => {
+                if self.others.is_empty() {
+                    self.sh_say("Only one FM-1".into(), "Only one F M 1");
+                    return;
+                }
+                self.side_by_side = !self.side_by_side;
+                self.store();
+                let t = if self.side_by_side { "Side by side" } else { "One at a time" };
+                self.sh_say(t.into(), t);
+            }
+            _ => {}
+        }
+    }
+
+    /// Each frame: the Shuttle's events, the ring's repeats, the holds, and what it shows.
+    fn shuttle_frame(&mut self, ctx: &egui::Context) {
+        let conn = self.shuttle.connected();
+        if conn != self.sh_was {
+            self.sh_was = conn;
+            self.knobs.shuttle = conn.then_some(self.sh_knob);
+            if conn {
+                let name = knobs::NAMES[self.sh_knob];
+                self.sh_say(format!("Shuttle: {name}"), &format!("Shuttle connected. {}.", Self::spoken(name)));
+            }
+        }
+        for e in self.shuttle.events() {
+            match e {
+                shuttle::Ev::Dial(d) => self.sh_turn(d),
+                shuttle::Ev::Ring(r) => {
+                    self.sh_ring = r;
+                    self.sh_next = Instant::now();
+                }
+                shuttle::Ev::Button(b, down) => self.sh_button(b, down),
+            }
+        }
+        for b in self.sh_presses.holds() {
+            self.sh_hold(b);
+        }
+        if self.sh_ring != 0 && Instant::now() >= self.sh_next {
+            let (every, clicks) = shuttle::ring_speed(self.sh_ring);
+            self.sh_turn(clicks);
+            self.sh_next = Instant::now() + every;
+        }
+        if self.sh_ring != 0 || self.sh_presses.any_down() {
+            ctx.request_repaint_after(Duration::from_millis(15));
+        }
+        if let Some((text, at)) = self.sh_toast.clone() {
+            if at.elapsed() < Duration::from_millis(1800) {
+                egui::Area::new(egui::Id::new("shuttle_toast")).order(egui::Order::Foreground).interactable(false)
+                    .anchor(Align2::CENTER_TOP, vec2(0.0, 40.0))
+                    .show(ctx, |ui| {
+                        egui::Frame::new().fill(Color32::from_black_alpha(225)).corner_radius(16.0).inner_margin(egui::Margin::symmetric(26, 14))
+                            .stroke(egui::Stroke::new(3.0_f32, Color32::from_rgb(255, 214, 10)))
+                            .show(ui, |ui| ui.label(egui::RichText::new(text).size(52.0).strong().color(Color32::from_rgb(255, 214, 10))));
+                    });
+                ctx.request_repaint_after(Duration::from_millis(100));
+            } else {
+                self.sh_toast = None;
+            }
+        }
     }
 
     /// Every FM-1's screen painted again (a new look, Smooth on or off).
@@ -2097,6 +2314,7 @@ impl eframe::App for App {
         if smooth_key {
             self.toggle_smooth();
         }
+        self.shuttle_frame(ctx);
         let need = self.need();
         if self.install.as_ref().is_some_and(|p| p.lock().unwrap().done) && need.is_none() {
             self.install = None; // the screen is back
