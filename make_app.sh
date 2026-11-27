@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds "FM-1 Big Screen.app" (DEBUGGER=1: "FM-1 Big Screen Debugger.app", with the MIDI debugger) (Apple silicon + Intel in one) and installs it in /Applications.
+# Builds "FM-1 Big Screen.app" (DEBUGGER=1: "FM-1 Debugger.app", with the MIDI debugger) (Apple silicon + Intel in one) and installs it in /Applications.
 set -e
 cd "$(dirname "$0")"
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -12,7 +12,7 @@ cargo build --release $FEAT --target x86_64-apple-darwin
 
 VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 NAME="FM-1 Big Screen"; ID="com.pfkellogg.fm1-mirror"
-[ "$DEBUGGER" = 1 ] && NAME="FM-1 Big Screen Debugger" && ID="com.pfkellogg.fm1-mirror.debugger"   # beside the normal app
+[ "$DEBUGGER" = 1 ] && NAME="FM-1 Debugger" && ID="com.pfkellogg.fm1-mirror.debugger"   # beside the normal app
 APP="dist/$NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

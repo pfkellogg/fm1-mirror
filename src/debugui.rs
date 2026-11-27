@@ -1,4 +1,4 @@
-//! The debugger's window (debug.rs does the stopping): controls, breakpoints, the stopped message decoded, the app's
+//! FM-1 Debugger's window (debug.rs does the stopping): controls, breakpoints, the stopped message decoded, the app's
 //! state (what changed since the last stop in yellow), sending bytes of your own, and the log. Its own window, so the
 //! FM-1's screen keeps all of its size. ⌘⇧D / Ctrl+Shift+D, or Debug in the bar.
 
@@ -6,8 +6,15 @@ use crate::debug::{self, Breakpoint, Dir, Event, Kind, Step, What};
 use eframe::egui::{self, Color32, RichText};
 use std::time::Instant;
 
-const Y: Color32 = Color32::from_rgb(255, 214, 10);
-const GREY: Color32 = Color32::from_rgb(140, 152, 170);
+// Black on white: easy to read, and it looks like the tool it is
+const INK: Color32 = Color32::from_rgb(22, 24, 28);
+const Y: Color32 = Color32::from_rgb(150, 82, 0);            // highlights: dark amber (yellow can't be read on white)
+const GREY: Color32 = Color32::from_rgb(88, 98, 112);
+const LINE: Color32 = Color32::from_rgb(214, 218, 224);
+const HILITE: Color32 = Color32::from_rgb(255, 238, 168);    // behind what changed / where it stopped
+const BLUE: Color32 = Color32::from_rgb(25, 90, 180);
+const RED: Color32 = Color32::from_rgb(196, 36, 36);
+const GREEN: Color32 = Color32::from_rgb(18, 122, 58);
 
 /// What the "Add a breakpoint" list offers: the firmware's hello first.
 fn choices() -> Vec<(String, What)> {
@@ -99,7 +106,7 @@ impl crate::App {
         if !self.dbg.open {
             return;
         }
-        let builder = egui::ViewportBuilder::default().with_title("FM-1 Big Screen · Debugger").with_inner_size([1180.0, 820.0]).with_icon(crate::app_icon());
+        let builder = egui::ViewportBuilder::default().with_title("FM-1 Debugger").with_inner_size([1180.0, 820.0]).with_icon(crate::app_icon());
         ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("debugger"), builder, |ctx, _| {
             if ctx.input(|i| i.viewport().close_requested()) {
                 self.dbg.open = false;
@@ -143,17 +150,19 @@ impl crate::App {
             debug::pause();
         }
 
-        egui::TopBottomPanel::top("dbg_top").show(ctx, |ui| {
+        egui::TopBottomPanel::top("dbg_top").frame(panel()).show(ctx, |ui| {
             compact(ui);
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 match &stop {
                     Some(s) => {
-                        ui.label(RichText::new(format!("STOPPED  #{}  {}", s.event.id, s.why)).color(Y).strong().size(17.0));
+                        ui.label(RichText::new(format!(" STOPPED ")).color(Color32::WHITE).background_color(RED).strong().size(15.0));
+                        ui.label(RichText::new(format!("#{}  {}", s.event.id, s.why)).color(INK).strong().size(15.0));
                         ui.label(RichText::new(format!("{} thread · {} {} · stopped {:.1} s", s.thread, if s.event.dir == Dir::In { "from" } else { "to" }, s.event.port, s.since.elapsed().as_secs_f32())).color(GREY));
                     }
                     None => {
-                        ui.label(RichText::new("RUNNING").color(Color32::from_rgb(70, 200, 120)).strong().size(17.0));
+                        ui.label(RichText::new(" RUNNING ").color(Color32::WHITE).background_color(GREEN).strong().size(15.0));
+                        ui.label(RichText::new(format!("{} breakpoint{}", debug::with_breakpoints(|b| b.iter().filter(|b| b.enabled).count()), "s set")).color(GREY));
                     }
                 }
             });
@@ -173,13 +182,13 @@ impl crate::App {
             });
             if let Some(s) = &stop {
                 if s.since.elapsed().as_secs_f32() > 2.5 {
-                    ui.label(RichText::new("While the app is stopped it says no hello: the FM-1 stops sending its screen about 3 seconds after the last one. Continue and it starts again.").color(GREY).size(12.0));
+                    ui.add(egui::Label::new(RichText::new("While the app is stopped it says no hello: the FM-1 stops sending its screen about 3 seconds after the last one. Continue and it starts again.").color(GREY).size(12.0)).wrap());
                 }
             }
             ui.add_space(4.0);
         });
 
-        egui::SidePanel::left("dbg_bps").resizable(true).default_width(340.0).show(ctx, |ui| {
+        egui::SidePanel::left("dbg_bps").resizable(true).default_width(340.0).frame(panel()).show(ctx, |ui| {
             compact(ui);
             ui.heading("Breakpoints");
             ui.horizontal_wrapped(|ui| {
@@ -194,9 +203,9 @@ impl crate::App {
                     ui.label(RichText::new("None yet: add one below, or click a message in the log.").color(GREY));
                 }
                 for (i, bp) in bps.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut bp.enabled, "");
-                        dot(ui, if bp.log_only { Color32::LIGHT_BLUE } else { Color32::from_rgb(230, 70, 70) });
+                        dot(ui, if bp.log_only { BLUE } else { RED });
                         ui.label(bp.label()).on_hover_text(if bp.log_only { "Log only: marks the log, never stops" } else { "Stops the app here" });
                         ui.label(RichText::new(format!("{} hits", bp.hits)).color(GREY));
                         if ui.small_button("Remove").clicked() { remove = Some(i) }
@@ -207,14 +216,14 @@ impl crate::App {
             ui.separator();
             ui.label(RichText::new("Add a breakpoint").strong());
             let ch = choices();
-            egui::ComboBox::from_id_salt("dbg_pick").width(300.0).selected_text(ch[self.dbg.pick.min(ch.len() - 1)].0.clone()).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("dbg_pick").width(ui.available_width() - 8.0).selected_text(ch[self.dbg.pick.min(ch.len() - 1)].0.clone()).show_ui(ui, |ui| {
                 for (i, (n, _)) in ch.iter().enumerate() {
                     ui.selectable_value(&mut self.dbg.pick, i, n);
                 }
             });
             let bytes = matches!(ch[self.dbg.pick.min(ch.len() - 1)].1, What::Bytes(_));
             if bytes {
-                ui.horizontal(|ui| { ui.label("Bytes"); ui.text_edit_singleline(&mut self.dbg.pattern).on_hover_text("Hex, ?? for any byte"); });
+                ui.horizontal(|ui| { ui.label("Bytes"); ui.add(egui::TextEdit::singleline(&mut self.dbg.pattern).desired_width(ui.available_width() - 8.0).font(egui::TextStyle::Monospace)).on_hover_text("Hex, ?? for any byte"); });
             }
             ui.horizontal(|ui| {
                 ui.label("Way");
@@ -222,7 +231,7 @@ impl crate::App {
                 ui.selectable_value(&mut self.dbg.dir, 1, "from FM-1");
                 ui.selectable_value(&mut self.dbg.dir, 2, "to FM-1");
             });
-            ui.horizontal(|ui| { ui.label("Only the port with"); ui.add(egui::TextEdit::singleline(&mut self.dbg.port).desired_width(120.0)); });
+            ui.horizontal(|ui| { ui.label("Only the port with"); ui.add(egui::TextEdit::singleline(&mut self.dbg.port).desired_width(ui.available_width() - 8.0)); });
             ui.horizontal(|ui| {
                 ui.label("Stop after the first");
                 ui.add(egui::TextEdit::singleline(&mut self.dbg.skip).desired_width(40.0));
@@ -249,7 +258,7 @@ impl crate::App {
                 }
             }
             if !self.dbg.note.is_empty() {
-                ui.label(RichText::new(&self.dbg.note).color(Y));
+                ui.add(egui::Label::new(RichText::new(&self.dbg.note).color(Y)).wrap());
             }
             ui.separator();
             ui.collapsing("How many of each", |ui| {
@@ -264,13 +273,13 @@ impl crate::App {
         });
 
         // the log, at the bottom
-        egui::TopBottomPanel::bottom("dbg_log").resizable(true).default_height(270.0).show(ctx, |ui| {
+        egui::TopBottomPanel::bottom("dbg_log").resizable(true).default_height(270.0).frame(panel()).show(ctx, |ui| {
             compact(ui);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.heading("Messages");
                 ui.checkbox(&mut self.dbg.hide_pictures, "Hide the screen's pictures");
                 ui.checkbox(&mut self.dbg.follow, "Follow the newest");
-                ui.add(egui::TextEdit::singleline(&mut self.dbg.filter).hint_text("filter: kind, port, bytes…").desired_width(200.0));
+                ui.add(egui::TextEdit::singleline(&mut self.dbg.filter).hint_text("Filter: kind, port, bytes").desired_width(180.0));
                 if ui.button("Clear").clicked() { debug::clear_log() }
                 if ui.button("Save the log…").clicked() {
                     let dir = dirs_home().join("Documents");
@@ -292,28 +301,47 @@ impl crate::App {
             let stopped_id = stop.as_ref().map(|s| s.event.id);
             let mut scroll = egui::ScrollArea::vertical().auto_shrink([false, false]);
             if self.dbg.follow { scroll = scroll.stick_to_bottom(true) }
+            // a header, then one row a message: fixed columns, long text cut short (hover for all of it)
+            const COLS: [(&str, f32); 5] = [("#", 62.0), ("Time  +since last", 150.0), ("Way · port", 170.0), ("Kind", 220.0), ("What it says", 0.0)];
+            ui.horizontal(|ui| {
+                for (h, w) in COLS {
+                    let w = if w == 0.0 { ui.available_width() } else { w };
+                    cell(ui, w, RichText::new(h).color(GREY).strong().size(12.0));
+                }
+            });
+            ui.add(egui::Separator::default().spacing(2.0));
             scroll.show(ui, |ui| {
-                egui::Grid::new("dbg_rows").striped(true).num_columns(6).show(ui, |ui| {
-                    let mut prev_t = None;
-                    for e in &rows {
-                        let mono = |s: String| RichText::new(s).monospace().size(12.0);
-                        let here = Some(e.id) == stopped_id;
-                        let sel = self.dbg.selected.as_ref().map(|s| s.id) == Some(e.id);
-                        let txt = |s: String| if here { mono(s).color(Y).strong() } else { mono(s) };
-                        if ui.selectable_label(sel || here, txt(format!("#{}", e.id))).clicked() { self.dbg.selected = Some(e.clone()) }
-                        ui.label(txt(format!("{:9.3}{}", e.t, prev_t.map_or(String::new(), |p: f64| format!(" +{:.0}ms", (e.t - p) * 1000.0)))));
-                        ui.label(txt(format!("{} {}", if e.dir == Dir::In { "from" } else { "to  " }, short(&e.port))));
-                        ui.label(txt(if e.answers_hello && !e.kind.says_hello() { format!("{} (hello answer)", e.kind.name()) } else { e.kind.name().to_string() }));
-                        ui.label(txt(debug::summary(e.dir, &e.bytes)));
-                        ui.label(match &e.mark { Some(m) => mono(m.clone()).color(Color32::LIGHT_BLUE), None => mono(debug::hex(&e.bytes[..e.bytes.len().min(12)])).color(GREY) });
-                        ui.end_row();
-                        prev_t = Some(e.t);
+                let mut prev_t = None;
+                for e in &rows {
+                    let here = Some(e.id) == stopped_id;
+                    let sel = self.dbg.selected.as_ref().map(|s| s.id) == Some(e.id);
+                    let mono = |s: String| {
+                        let t = RichText::new(s).monospace().size(12.0).color(INK);
+                        if here { t.background_color(HILITE).strong() } else { t }
+                    };
+                    let kind = if e.answers_hello && !e.kind.says_hello() { format!("{} (hello answer)", e.kind.name()) } else { e.kind.name().to_string() };
+                    let what = match &e.mark { Some(m) => m.clone(), None => debug::summary(e.dir, &e.bytes) };
+                    let r = ui.horizontal(|ui| {
+                        cell(ui, COLS[0].1, mono(format!("#{}", e.id)));
+                        cell(ui, COLS[1].1, mono(format!("{:8.3}{}", e.t, prev_t.map_or(String::new(), |p: f64| format!("  +{:.0} ms", (e.t - p) * 1000.0)))));
+                        cell(ui, COLS[2].1, mono(format!("{} {}", if e.dir == Dir::In { "from" } else { "to  " }, short(&e.port))));
+                        cell(ui, COLS[3].1, mono(kind.clone()));
+                        let w = ui.available_width();
+                        let t = mono(what.clone());
+                        cell(ui, w, if e.mark.is_some() { t.color(BLUE) } else { t });
+                    });
+                    let resp = ui.interact(r.response.rect, ui.id().with(("row", e.id)), egui::Sense::click());
+                    if sel {
+                        ui.painter().rect_stroke(r.response.rect.expand(1.0), 2.0, egui::Stroke::new(1.5_f32, BLUE), egui::StrokeKind::Outside);
                     }
-                });
+                    if resp.clicked() { self.dbg.selected = Some(e.clone()) }
+                    resp.on_hover_text(format!("{kind}\n{what}\n{}", debug::hex(&e.bytes)));
+                    prev_t = Some(e.t);
+                }
             });
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().frame(panel()).show(ctx, |ui| {
             compact(ui);
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 // the message: the stopped one, or one picked in the log
@@ -325,9 +353,11 @@ impl crate::App {
                 match ev {
                     Some(e) => {
                         let (kind, fields) = debug::decode(e.dir, &full);
-                        ui.horizontal(|ui| {
-                            ui.heading(RichText::new(kind.name()).color(Y));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.heading(RichText::new(kind.name()).color(INK).strong());
                             ui.label(RichText::new(format!("#{} · {} {} · {} bytes", e.id, if e.dir == Dir::In { "from" } else { "to" }, e.port, e.len)).color(GREY));
+                        });
+                        ui.horizontal_wrapped(|ui| {
                             if ui.small_button("Stop on this kind").clicked() {
                                 debug::with_breakpoints(|b| b.push(Breakpoint::new(What::Kind(kind))));
                             }
@@ -338,21 +368,28 @@ impl crate::App {
                             if ui.small_button("Copy as hex").clicked() { ui.ctx().copy_text(debug::hex(&full)) }
                             if ui.small_button("Send it again…").clicked() { self.dbg.send = debug::hex(&full); self.dbg.send_to = e.port.clone(); }
                         });
-                        egui::Grid::new("dbg_fields").num_columns(2).striped(true).show(ui, |ui| {
+                        let vw = (ui.available_width() - 170.0).max(120.0);
+                        egui::Grid::new("dbg_fields").num_columns(2).striped(true).min_col_width(150.0).max_col_width(vw).show(ui, |ui| {
                             for (k, v) in &fields {
                                 ui.label(RichText::new(k).color(GREY));
-                                ui.label(RichText::new(v).monospace());
+                                ui.add(egui::Label::new(RichText::new(v).monospace().color(INK)).wrap());
                                 ui.end_row();
                             }
                         });
                         ui.add_space(4.0);
-                        ui.label(RichText::new(debug::dump(&full[..full.len().min(512)])).monospace().size(12.0));
+                        egui::Frame::new().fill(Color32::from_rgb(246, 247, 249)).stroke(egui::Stroke::new(1.0_f32, LINE)).corner_radius(4.0).inner_margin(8.0).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            egui::ScrollArea::horizontal().id_salt("dump").show(ui, |ui| {
+                                ui.add(egui::Label::new(RichText::new(debug::dump(&full[..full.len().min(512)])).monospace().size(12.0).color(INK)).extend());
+                            });
+                        });
                         if e.len > full.len() || full.len() > 512 {
                             ui.label(RichText::new(format!("(the first {} of {} bytes)", full.len().min(512), e.len)).color(GREY));
                         }
                     }
                     None => {
                         ui.heading("Nothing stopped");
+                        ui.add_space(2.0);
                         ui.label("Add a breakpoint on the left (\"When the firmware says hello\" is a good first one), or press Pause (F6) to stop at the next message. Click any message in the log to see it decoded.");
                     }
                 }
@@ -360,23 +397,24 @@ impl crate::App {
                 ui.horizontal(|ui| {
                     ui.heading("The app's state");
                     if stop.is_some() && !self.dbg.before.is_empty() {
-                        ui.label(RichText::new("yellow: changed since the last stop").color(Y).size(12.0));
+                        ui.label(RichText::new(" highlighted: changed since the last stop ").color(INK).background_color(HILITE).size(12.0));
                     }
                 });
-                egui::Grid::new("dbg_state").num_columns(2).striped(true).show(ui, |ui| {
+                let vw = (ui.available_width() - 250.0).max(120.0);
+                egui::Grid::new("dbg_state").num_columns(2).striped(true).min_col_width(230.0).max_col_width(vw).show(ui, |ui| {
                     for (k, v) in &self.dbg.now_state {
                         let ticking = k.ends_with("linked") || k.ends_with("last screen") || k.ends_with("screen since");
                         let changed = stop.is_some() && !ticking && self.dbg.before.iter().find(|(bk, _)| bk == k).is_some_and(|(_, bv)| bv != v);
                         ui.label(RichText::new(k).color(GREY));
-                        let t = RichText::new(v).monospace();
-                        ui.label(if changed { t.color(Y).strong() } else { t });
+                        let t = RichText::new(v).monospace().color(INK);
+                        ui.add(egui::Label::new(if changed { t.background_color(HILITE).strong() } else { t }).wrap());
                         ui.end_row();
                     }
                 });
                 ui.separator();
                 ui.heading("Send bytes to an FM-1");
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.dbg.send).desired_width(380.0).font(egui::TextStyle::Monospace));
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.dbg.send).desired_width((ui.available_width() - 260.0).clamp(160.0, 420.0)).font(egui::TextStyle::Monospace));
                     let ports: Vec<String> = std::iter::once(self.port.clone()).chain(self.others.iter().map(|u| u.port.clone())).collect();
                     if self.dbg.send_to.is_empty() || !ports.contains(&self.dbg.send_to) { self.dbg.send_to = self.port.clone() }
                     egui::ComboBox::from_id_salt("dbg_to").selected_text(short(&self.dbg.send_to)).show_ui(ui, |ui| {
@@ -395,7 +433,7 @@ impl crate::App {
                         };
                     }
                 });
-                ui.label(RichText::new("e.g. F0 7D 46 4C 01 F7 asks which firmware · F0 7D 46 53 07 0A 01 F7 presses PLAY").color(GREY).size(12.0));
+                ui.add(egui::Label::new(RichText::new("e.g. F0 7D 46 4C 01 F7 asks which firmware · F0 7D 46 53 07 0A 01 F7 presses PLAY").color(GREY).size(12.0)).wrap());
             });
         });
     }
@@ -413,8 +451,36 @@ fn compact(ui: &mut egui::Ui) {
         (TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace)),
     ]
     .into();
-    ui.style_mut().spacing.button_padding = egui::vec2(6.0, 3.0);
-    ui.style_mut().spacing.interact_size.y = 20.0;
+    ui.style_mut().spacing.button_padding = egui::vec2(8.0, 4.0);
+    ui.style_mut().spacing.interact_size.y = 22.0;
+    ui.style_mut().spacing.item_spacing = egui::vec2(8.0, 6.0);
+    let mut v = egui::Visuals::light();
+    v.override_text_color = Some(INK);
+    v.panel_fill = Color32::WHITE;
+    v.window_fill = Color32::WHITE;
+    v.extreme_bg_color = Color32::from_rgb(250, 251, 252);   // inside text boxes
+    v.faint_bg_color = Color32::from_rgb(244, 246, 249);
+    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, LINE);
+    // text boxes and buttons: a visible outline
+    v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(178, 186, 196));
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(240, 242, 245);
+    v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, BLUE);
+    v.selection.bg_fill = Color32::from_rgb(205, 224, 250);
+    v.selection.stroke = egui::Stroke::new(1.0_f32, BLUE);
+    ui.style_mut().visuals = v;
+}
+
+/// Each panel: white, with a little room inside.
+fn panel() -> egui::Frame {
+    egui::Frame::new().fill(Color32::WHITE).inner_margin(egui::Margin::symmetric(12, 10)).stroke(egui::Stroke::new(1.0_f32, LINE))
+}
+
+/// A column of the log: this wide, its text cut short to fit.
+fn cell(ui: &mut egui::Ui, w: f32, t: RichText) {
+    ui.allocate_ui_with_layout(egui::vec2(w, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_width(w);
+        ui.add(egui::Label::new(t).truncate());
+    });
 }
 
 fn dot(ui: &mut egui::Ui, c: Color32) {
