@@ -933,7 +933,7 @@ impl App {
                     .show(ctx, |ui| {
                         egui::Frame::new().fill(Color32::from_black_alpha(225)).corner_radius(16.0).inner_margin(egui::Margin::symmetric(26, 14))
                             .stroke(egui::Stroke::new(3.0_f32, Color32::from_rgb(255, 214, 10)))
-                            .show(ui, |ui| ui.label(egui::RichText::new(text).size(52.0).strong().color(Color32::from_rgb(255, 214, 10))));
+                            .show(ui, |ui| ui.add(egui::Label::new(egui::RichText::new(text).size(52.0).strong().color(Color32::from_rgb(255, 214, 10))).wrap_mode(egui::TextWrapMode::Extend)));
                     });
                 ctx.request_repaint_after(Duration::from_millis(100));
             } else {
