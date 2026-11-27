@@ -351,8 +351,8 @@ fn install_zip(id: &str, zip: Vec<u8>, folder: Option<&str>) -> Result<usize, St
 
 /// The Sound menu's families, in order (a sound not in them goes under "More").
 pub const GROUPS: &[(&str, &[&str])] = &[
-    ("Keys", &["piano", "vibraphone", "triangle", "tibetanbells", "trianglebells", "accordion"]),
-    ("Strings and voices", &["strings", "violin", "choir", "sitar"]),
+    ("Keys", &["piano", "vibraphone", "triangle", "tibetanbells", "trianglebells", "fmepiano", "fmtubular", "glassharmonica", "accordion"]),
+    ("Strings and voices", &["strings", "crystalstrings", "violin", "choir", "glasschoir", "sitar"]),
     ("Brass", &["trumpet", "flugelhorn", "brass", "frenchhorn"]),
     ("Woodwinds", &["flute", "shakuhachi", "altosax", "clarinet", "oboe", "harmonica"]),
 ];
@@ -365,6 +365,11 @@ pub fn pretty(id: &str) -> String {
         "frenchhorn" => return "French Horn".into(),
         "tibetanbells" => return "Tibetan Bells".into(),
         "trianglebells" => return "Triangle Bells (FM)".into(),
+        "fmepiano" => return "FM Electric Piano".into(),
+        "fmtubular" => return "FM Tubular Bells".into(),
+        "glasschoir" => return "Glass Choir".into(),
+        "crystalstrings" => return "Crystal Strings".into(),
+        "glassharmonica" => return "Glass Harmonica".into(),
         "rich" => return "Rich".into(),
         _ => {}
     }

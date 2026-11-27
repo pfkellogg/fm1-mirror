@@ -73,9 +73,9 @@ open FM-1 Big Screen.
 
 **On Android:** see [FM-1 Big Screen + Spyglass](https://github.com/pfkellogg/fm1-mirror-spyglass-android).
 
-## The sounds (20, and Rich)
+## The sounds (25, and Rich)
 
-**Sound › Get sounds…** lists every sound, each to download on its own, or **Get all** flute, strings, choir, shakuhachi, flugelhorn, trumpet, violin, brass, sitar, French horn, harmonica, alto sax, clarinet, oboe, accordion, vibraphone, triangle, Tibetan bells (tingsha) and Triangle Bells (FM: the triangle frequency-modulated by the Tibetan bells), all
+**Sound › Get sounds…** lists every sound, each to download on its own, or **Get all** flute, strings, choir, shakuhachi, flugelhorn, trumpet, violin, brass, sitar, French horn, harmonica, alto sax, clarinet, oboe, accordion, vibraphone, triangle, Tibetan bells (tingsha) and Triangle Bells (FM: the triangle frequency-modulated by the Tibetan bells), and five more FM sounds: FM Electric Piano, FM Tubular Bells, Glass Choir (the choir modulated by the Tibetan bells), Crystal Strings (the strings by the vibraphone) and Glass Harmonica (the flute by the vibraphone), all
 Mellotron-style tape sounds made from scratch by programs (no recordings: free to use in your own music), a **Grand Piano**
 (made from the [Salamander Grand Piano](https://github.com/sfzinstruments/SalamanderGrandPiano), a Yamaha C5 recorded by Alexander Holm,
 CC-BY 3.0), and **Rich**
