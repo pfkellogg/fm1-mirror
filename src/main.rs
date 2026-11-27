@@ -44,7 +44,7 @@ use screen::{Screen, ASK_INFO, SIZE};
 #[cfg(not(feature = "debugger"))]
 const APP_NAME: &str = "FM-1 Big Screen";
 #[cfg(feature = "debugger")]
-const APP_NAME: &str = "FM-1 Big Screen Debugger";
+const APP_NAME: &str = "FM-1 Debugger";
 /// Firmwares whose authors built Big Screen in themselves (no Key Lights to send, nothing newer of ours to get): never
 /// "the older Big Screen". SHRUB (Steve Duda, Xfer Records).
 const OWN_BIG_SCREEN: [&str; 1] = ["FM-1_901"];

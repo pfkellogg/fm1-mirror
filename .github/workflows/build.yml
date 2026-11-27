@@ -17,7 +17,7 @@ jobs:
           - os: ubuntu-22.04
             name: linux
     runs-on: ${{ matrix.os }}
-    # a tag ending in -debugger (from the debugger branch): "FM-1 Big Screen Debugger", downloads named …-debugger
+    # a tag ending in -debugger (from the debugger branch): "FM-1 Debugger", downloads named …-debugger
     env:
       DEBUGGER: ${{ endsWith(github.ref_name, '-debugger') && '1' || '' }}
       FEAT: ${{ endsWith(github.ref_name, '-debugger') && '--features debugger' || '' }}
@@ -33,7 +33,7 @@ jobs:
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
           sed -i '' '/\/Applications/d' make_app.sh
           ./make_app.sh
-          APPN="FM-1 Big Screen"; [ "$DEBUGGER" = 1 ] && APPN="FM-1 Big Screen Debugger"
+          APPN="FM-1 Big Screen"; [ "$DEBUGGER" = 1 ] && APPN="FM-1 Debugger"
           (cd dist && ditto -c -k --keepParent "$APPN.app" ../FM-1-Mirror-mac$SFX.zip)
           LITE=1 ./make_app.sh
           (cd dist && ditto -c -k --keepParent "$APPN.app" ../FM-1-Mirror-mac-lite$SFX.zip)
