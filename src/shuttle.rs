@@ -92,15 +92,36 @@ pub struct Decoder {
     dial: Option<u8>,
     ring: i8,
     buttons: u8,
+    /// When the ring was last 3 or more steps out, and when it was let go: let go, it springs back so fast that it
+    /// can stop a step short (and then send nothing more) or bounce to the other side.
+    out_at: Option<Instant>,
+    let_go_at: Option<Instant>,
 }
 
 impl Decoder {
     pub fn feed(&mut self, r: &[u8]) -> Vec<Ev> {
+        self.feed_at(r, Instant::now())
+    }
+    pub fn feed_at(&mut self, r: &[u8], now: Instant) -> Vec<Ev> {
         let mut out = vec![];
         if r.len() < 5 {
             return out;
         }
-        let ring = (r[0] as i8).clamp(-7, 7);
+        let raw = (r[0] as i8).clamp(-7, 7);
+        let mut ring = raw;
+        let soon = |t: Option<Instant>, ms: u64| t.is_some_and(|t| now.duration_since(t) < Duration::from_millis(ms));
+        if raw.abs() >= 3 && !soon(self.let_go_at, 200) {
+            self.out_at = Some(now);
+        } else if raw.abs() <= 2 && soon(self.out_at, 150) {
+            ring = 0; // falling fast from far out: it was let go (a step short is still let go)
+        }
+        if ring != 0 && (soon(self.let_go_at, 200) || (self.ring != 0 && ring.signum() != self.ring.signum())) {
+            ring = 0; // a bounce right after letting go, or across 0 without stopping there
+        }
+        if ring == 0 && self.ring != 0 {
+            self.let_go_at = Some(now);
+            self.out_at = None;
+        }
         if ring != self.ring {
             self.ring = ring;
             out.push(Ev::Ring(ring));
@@ -207,10 +228,38 @@ mod tests {
         assert_eq!(d.feed(&[0, 0xff, 0, 0, 0]), vec![]);                       // a jump: no turn
         assert_eq!(d.feed(&[0, 0x01, 0, 0, 0]), vec![Ev::Dial(2)]);             // across the wrap
         assert_eq!(d.feed(&[0x05, 0x01, 0, 0, 0]), vec![Ev::Ring(5)]);
-        assert_eq!(d.feed(&[0xf9, 0x01, 0, 0, 0]), vec![Ev::Ring(-7)]);
-        assert_eq!(d.feed(&[0, 0x01, 0, 0x10, 0]), vec![Ev::Ring(0), Ev::Button(1, true)]);
+        assert_eq!(d.feed(&[0, 0x01, 0, 0, 0]), vec![Ev::Ring(0)]);
+        assert_eq!(d.feed(&[0, 0x01, 0, 0x10, 0]), vec![Ev::Button(1, true)]);
         assert_eq!(d.feed(&[0, 0x01, 0, 0, 0x01]), vec![Ev::Button(1, false), Ev::Button(5, true)]);
         assert_eq!(d.feed(&[0, 0x01, 0, 0x80, 0]), vec![Ev::Button(4, true), Ev::Button(5, false)]);
+    }
+    #[test]
+    fn the_ring_let_go_stops_even_a_step_short_or_bouncing() {
+        // the real log: twisted to -7, let go: -6..-1 in 50 ms, then a bounce 5, -5, 2, -1, and nothing more
+        fn feed(d: &mut Decoder, last: &mut i8, v: i8, at: Instant) -> i8 {
+            for e in d.feed_at(&[v as u8, 21, 0, 0, 0], at) {
+                if let Ev::Ring(r) = e {
+                    *last = r;
+                }
+            }
+            *last
+        }
+        let mut d = Decoder::default();
+        let mut last = 0i8;
+        let t = Instant::now();
+        let ms = |m: u64| t + Duration::from_millis(m);
+        for (i, v) in [-1i8, -2, -3, -4, -5, -6, -7].iter().enumerate() {
+            feed(&mut d, &mut last, *v, ms(i as u64 * 50));
+        }
+        assert_eq!(feed(&mut d, &mut last, -7, ms(3000)), -7);          // held out there
+        let mut at = 3460;
+        for v in [-6i8, -5, -4, -3, -2, -1, 5, -5, 2, -1] {
+            at += 8;
+            feed(&mut d, &mut last, v, ms(at));
+        }
+        assert_eq!(last, 0);                                             // let go: 0, not -1 or 5
+        assert_eq!(feed(&mut d, &mut last, 2, ms(at + 400)), 2);         // a new twist later is a twist
+        assert_eq!(feed(&mut d, &mut last, 1, ms(at + 2000)), 1);        // eased back slowly: still turning
     }
     #[test]
     fn the_ring_goes_faster_further() {
