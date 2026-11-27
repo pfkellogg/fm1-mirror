@@ -1,16 +1,18 @@
 #!/bin/sh
-# Builds "FM-1 Big Screen.app" (Apple silicon + Intel in one) and installs it in /Applications.
+# Builds "FM-1 Big Screen.app" (DEBUGGER=1: "FM-1 Big Screen Debugger.app", with the MIDI debugger) (Apple silicon + Intel in one) and installs it in /Applications.
 set -e
 cd "$(dirname "$0")"
 export PATH="$HOME/.cargo/bin:$PATH"
 rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
 # LITE=1: the lite version, without the Mellotron's built-in sounds (it can download them)
 FEAT=""; [ "$LITE" = 1 ] && FEAT="--no-default-features"
+[ "$DEBUGGER" = 1 ] && FEAT="$FEAT --features debugger"
 cargo build --release $FEAT --target aarch64-apple-darwin
 cargo build --release $FEAT --target x86_64-apple-darwin
 
 VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-NAME="FM-1 Big Screen"
+NAME="FM-1 Big Screen"; ID="com.pfkellogg.fm1-mirror"
+[ "$DEBUGGER" = 1 ] && NAME="FM-1 Big Screen Debugger" && ID="com.pfkellogg.fm1-mirror.debugger"   # beside the normal app
 APP="dist/$NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -25,7 +27,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>$NAME</string>
   <key>CFBundleDisplayName</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>com.pfkellogg.fm1-mirror</string>
+  <key>CFBundleIdentifier</key><string>$ID</string>
   <key>CFBundleExecutable</key><string>fm1-mirror</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>

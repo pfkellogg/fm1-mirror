@@ -11,6 +11,7 @@
 mod bigscreen2;
 mod chord;
 mod debug;
+#[cfg(feature = "debugger")]
 mod debugui;
 mod fm1base;
 mod glass;
@@ -40,7 +41,10 @@ use serde_json::{json, Value};
 
 use screen::{Screen, ASK_INFO, SIZE};
 
+#[cfg(not(feature = "debugger"))]
 const APP_NAME: &str = "FM-1 Big Screen";
+#[cfg(feature = "debugger")]
+const APP_NAME: &str = "FM-1 Big Screen Debugger";
 /// Firmwares whose authors built Big Screen in themselves (no Key Lights to send, nothing newer of ours to get): never
 /// "the older Big Screen". SHRUB (Steve Duda, Xfer Records).
 const OWN_BIG_SCREEN: [&str; 1] = ["FM-1_901"];
@@ -447,6 +451,7 @@ struct App {
     lights_on: bool,
     knobs: knobs::Knobs,
     /// The MIDI debugger's window (debugui.rs).
+    #[cfg(feature = "debugger")]
     dbg: debugui::DebugUi,
     /// A Contour ShuttleXpress/ShuttlePRO as a remote (shuttle.rs): the knob it turns (0..7, knobs::NAMES), the
     /// ring's position and when it turns next, its buttons' presses, what it shows big, and if it speaks.
@@ -574,6 +579,7 @@ impl App {
             },
             lights_on: saved["lights"].as_bool().unwrap_or(false),
             knobs: knobs::Knobs::default(),
+            #[cfg(feature = "debugger")]
             dbg: debugui::DebugUi::default(),
             shuttle: { let c = ctx.clone(); shuttle::Shuttle::start(move || c.request_repaint()) },
             sh_knob: 2,
@@ -625,6 +631,7 @@ impl App {
         app.start_mellotron();   // the sound it played last time
         app.apply_fm1_light();
         // FM1_DEBUG=1 opens the debugger at start; FM1_DEBUG=hello also stops when the firmware says hello
+        #[cfg(feature = "debugger")]
         if let Ok(v) = std::env::var("FM1_DEBUG") {
             app.dbg.open = true;
             debug::set_on(true, ctx);
@@ -1722,6 +1729,7 @@ impl App {
             {
                 self.toggle_voice();
             }
+            #[cfg(feature = "debugger")]
             if ui.add_sized([Self::width_for(ui, &["Debug"]), h], egui::SelectableLabel::new(self.dbg.open, "Debug"))
                 .on_hover_text("The MIDI debugger: every message to and from the FM-1, decoded, with breakpoints (⌘⇧D)")
                 .clicked()
@@ -2335,6 +2343,7 @@ impl eframe::App for App {
             self.main_at = Some(r.min);
         }
         self.sounds_window(ctx);
+        #[cfg(feature = "debugger")]
         self.debug_window(ctx);
         self.keep_linked(ctx);
         self.take_screen(ctx);

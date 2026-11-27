@@ -1,4 +1,5 @@
-//! The MIDI debugger (⌘⇧D / Ctrl+Shift+D): every message between the app and each FM-1, decoded, with breakpoints
+#![cfg_attr(not(feature = "debugger"), allow(dead_code))]
+//! The MIDI debugger (⌘⇧D / Ctrl+Shift+D, in the "FM-1 Big Screen Debugger" build only: `--features debugger`): every message between the app and each FM-1, decoded, with breakpoints
 //! that really stop the app.
 //!
 //! - The input callback (open()) and each link's hello thread (hellos()) call `check` with every message before the
