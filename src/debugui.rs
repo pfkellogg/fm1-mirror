@@ -6,15 +6,21 @@ use crate::debug::{self, Breakpoint, Dir, Event, Kind, Step, What};
 use eframe::egui::{self, Color32, RichText};
 use std::time::Instant;
 
-// Black on white: easy to read, and it looks like the tool it is
-const INK: Color32 = Color32::from_rgb(22, 24, 28);
-const Y: Color32 = Color32::from_rgb(150, 82, 0);            // highlights: dark amber (yellow can't be read on white)
-const GREY: Color32 = Color32::from_rgb(88, 98, 112);
-const LINE: Color32 = Color32::from_rgb(214, 218, 224);
-const HILITE: Color32 = Color32::from_rgb(255, 238, 168);    // behind what changed / where it stopped
-const BLUE: Color32 = Color32::from_rgb(25, 90, 180);
-const RED: Color32 = Color32::from_rgb(196, 36, 36);
-const GREEN: Color32 = Color32::from_rgb(18, 122, 58);
+// Two looks: black on white (the usual) or white on black (the switch at the top; remembered)
+static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn dark() -> bool { DARK.load(std::sync::atomic::Ordering::Relaxed) }
+pub fn is_dark() -> bool { dark() }
+pub fn set_dark(on: bool) { DARK.store(on, std::sync::atomic::Ordering::Relaxed) }
+fn pick(light: (u8, u8, u8), dk: (u8, u8, u8)) -> Color32 { let (r, g, b) = if dark() { dk } else { light }; Color32::from_rgb(r, g, b) }
+fn ink() -> Color32 { pick((22, 24, 28), (236, 238, 242)) }
+fn paper() -> Color32 { pick((255, 255, 255), (14, 16, 20)) }
+fn amber() -> Color32 { pick((150, 82, 0), (255, 196, 60)) }      // highlights (yellow can't be read on white)
+fn grey() -> Color32 { pick((88, 98, 112), (150, 160, 175)) }
+fn line() -> Color32 { pick((214, 218, 224), (52, 58, 68)) }
+fn hilite() -> Color32 { pick((255, 238, 168), (92, 70, 0)) }    // behind what changed / where it stopped
+fn blue() -> Color32 { pick((25, 90, 180), (110, 170, 255)) }
+fn red() -> Color32 { pick((196, 36, 36), (210, 50, 50)) }
+fn green() -> Color32 { pick((18, 122, 58), (30, 140, 70)) }
 
 /// What the "Add a breakpoint" list offers: the firmware's hello first.
 fn choices() -> Vec<(String, What)> {
@@ -156,15 +162,24 @@ impl crate::App {
             ui.horizontal_wrapped(|ui| {
                 match &stop {
                     Some(s) => {
-                        ui.label(RichText::new(format!(" STOPPED ")).color(Color32::WHITE).background_color(RED).strong().size(15.0));
-                        ui.label(RichText::new(format!("#{}  {}", s.event.id, s.why)).color(INK).strong().size(15.0));
-                        ui.label(RichText::new(format!("{} thread · {} {} · stopped {:.1} s", s.thread, if s.event.dir == Dir::In { "from" } else { "to" }, s.event.port, s.since.elapsed().as_secs_f32())).color(GREY));
+                        ui.label(RichText::new(format!(" STOPPED ")).color(Color32::WHITE).background_color(red()).strong().size(15.0));
+                        ui.label(RichText::new(format!("#{}  {}", s.event.id, s.why)).color(ink()).strong().size(15.0));
+                        ui.label(RichText::new(format!("{} thread · {} {} · stopped {:.1} s", s.thread, if s.event.dir == Dir::In { "from" } else { "to" }, s.event.port, s.since.elapsed().as_secs_f32())).color(grey()));
                     }
                     None => {
-                        ui.label(RichText::new(" RUNNING ").color(Color32::WHITE).background_color(GREEN).strong().size(15.0));
-                        ui.label(RichText::new(format!("{} breakpoint{}", debug::with_breakpoints(|b| b.iter().filter(|b| b.enabled).count()), "s set")).color(GREY));
+                        ui.label(RichText::new(" RUNNING ").color(Color32::WHITE).background_color(green()).strong().size(15.0));
+                        ui.label(RichText::new(format!("{} breakpoint{}", debug::with_breakpoints(|b| b.iter().filter(|b| b.enabled).count()), "s set")).color(grey()));
                     }
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut d = dark();
+                    ui.selectable_value(&mut d, true, "Dark");
+                    ui.selectable_value(&mut d, false, "Light");
+                    if d != dark() {
+                        set_dark(d);
+                        self.store();
+                    }
+                });
             });
             ui.horizontal_wrapped(|ui| {
                 let on = stop.is_some();
@@ -182,7 +197,7 @@ impl crate::App {
             });
             if let Some(s) = &stop {
                 if s.since.elapsed().as_secs_f32() > 2.5 {
-                    ui.add(egui::Label::new(RichText::new("While the app is stopped it says no hello: the FM-1 stops sending its screen about 3 seconds after the last one. Continue and it starts again.").color(GREY).size(12.0)).wrap());
+                    ui.add(egui::Label::new(RichText::new("While the app is stopped it says no hello: the FM-1 stops sending its screen about 3 seconds after the last one. Continue and it starts again.").color(grey()).size(12.0)).wrap());
                 }
             }
             ui.add_space(4.0);
@@ -200,14 +215,14 @@ impl crate::App {
             let mut remove = None;
             debug::with_breakpoints(|bps| {
                 if bps.is_empty() {
-                    ui.label(RichText::new("None yet: add one below, or click a message in the log.").color(GREY));
+                    ui.label(RichText::new("None yet: add one below, or click a message in the log.").color(grey()));
                 }
                 for (i, bp) in bps.iter_mut().enumerate() {
                     ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut bp.enabled, "");
-                        dot(ui, if bp.log_only { BLUE } else { RED });
+                        dot(ui, if bp.log_only { blue() } else { red() });
                         ui.label(bp.label()).on_hover_text(if bp.log_only { "Log only: marks the log, never stops" } else { "Stops the app here" });
-                        ui.label(RichText::new(format!("{} hits", bp.hits)).color(GREY));
+                        ui.label(RichText::new(format!("{} hits", bp.hits)).color(grey()));
                         if ui.small_button("Remove").clicked() { remove = Some(i) }
                     });
                 }
@@ -258,7 +273,7 @@ impl crate::App {
                 }
             }
             if !self.dbg.note.is_empty() {
-                ui.add(egui::Label::new(RichText::new(&self.dbg.note).color(Y)).wrap());
+                ui.add(egui::Label::new(RichText::new(&self.dbg.note).color(amber())).wrap());
             }
             ui.separator();
             ui.collapsing("How many of each", |ui| {
@@ -306,7 +321,7 @@ impl crate::App {
             ui.horizontal(|ui| {
                 for (h, w) in COLS {
                     let w = if w == 0.0 { ui.available_width() } else { w };
-                    cell(ui, w, RichText::new(h).color(GREY).strong().size(12.0));
+                    cell(ui, w, RichText::new(h).color(grey()).strong().size(12.0));
                 }
             });
             ui.add(egui::Separator::default().spacing(2.0));
@@ -316,8 +331,8 @@ impl crate::App {
                     let here = Some(e.id) == stopped_id;
                     let sel = self.dbg.selected.as_ref().map(|s| s.id) == Some(e.id);
                     let mono = |s: String| {
-                        let t = RichText::new(s).monospace().size(12.0).color(INK);
-                        if here { t.background_color(HILITE).strong() } else { t }
+                        let t = RichText::new(s).monospace().size(12.0).color(ink());
+                        if here { t.background_color(hilite()).strong() } else { t }
                     };
                     let kind = if e.answers_hello && !e.kind.says_hello() { format!("{} (hello answer)", e.kind.name()) } else { e.kind.name().to_string() };
                     let what = match &e.mark { Some(m) => m.clone(), None => debug::summary(e.dir, &e.bytes) };
@@ -328,11 +343,11 @@ impl crate::App {
                         cell(ui, COLS[3].1, mono(kind.clone()));
                         let w = ui.available_width();
                         let t = mono(what.clone());
-                        cell(ui, w, if e.mark.is_some() { t.color(BLUE) } else { t });
+                        cell(ui, w, if e.mark.is_some() { t.color(blue()) } else { t });
                     });
                     let resp = ui.interact(r.response.rect, ui.id().with(("row", e.id)), egui::Sense::click());
                     if sel {
-                        ui.painter().rect_stroke(r.response.rect.expand(1.0), 2.0, egui::Stroke::new(1.5_f32, BLUE), egui::StrokeKind::Outside);
+                        ui.painter().rect_stroke(r.response.rect.expand(1.0), 2.0, egui::Stroke::new(1.5_f32, blue()), egui::StrokeKind::Outside);
                     }
                     if resp.clicked() { self.dbg.selected = Some(e.clone()) }
                     resp.on_hover_text(format!("{kind}\n{what}\n{}", debug::hex(&e.bytes)));
@@ -354,8 +369,8 @@ impl crate::App {
                     Some(e) => {
                         let (kind, fields) = debug::decode(e.dir, &full);
                         ui.horizontal_wrapped(|ui| {
-                            ui.heading(RichText::new(kind.name()).color(INK).strong());
-                            ui.label(RichText::new(format!("#{} · {} {} · {} bytes", e.id, if e.dir == Dir::In { "from" } else { "to" }, e.port, e.len)).color(GREY));
+                            ui.heading(RichText::new(kind.name()).color(ink()).strong());
+                            ui.label(RichText::new(format!("#{} · {} {} · {} bytes", e.id, if e.dir == Dir::In { "from" } else { "to" }, e.port, e.len)).color(grey()));
                         });
                         ui.horizontal_wrapped(|ui| {
                             if ui.small_button("Stop on this kind").clicked() {
@@ -371,20 +386,20 @@ impl crate::App {
                         let vw = (ui.available_width() - 170.0).max(120.0);
                         egui::Grid::new("dbg_fields").num_columns(2).striped(true).min_col_width(150.0).max_col_width(vw).show(ui, |ui| {
                             for (k, v) in &fields {
-                                ui.label(RichText::new(k).color(GREY));
-                                ui.add(egui::Label::new(RichText::new(v).monospace().color(INK)).wrap());
+                                ui.label(RichText::new(k).color(grey()));
+                                ui.add(egui::Label::new(RichText::new(v).monospace().color(ink())).wrap());
                                 ui.end_row();
                             }
                         });
                         ui.add_space(4.0);
-                        egui::Frame::new().fill(Color32::from_rgb(246, 247, 249)).stroke(egui::Stroke::new(1.0_f32, LINE)).corner_radius(4.0).inner_margin(8.0).show(ui, |ui| {
+                        egui::Frame::new().fill(pick((246, 247, 249), (22, 25, 30))).stroke(egui::Stroke::new(1.0_f32, line())).corner_radius(4.0).inner_margin(8.0).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             egui::ScrollArea::horizontal().id_salt("dump").show(ui, |ui| {
-                                ui.add(egui::Label::new(RichText::new(debug::dump(&full[..full.len().min(512)])).monospace().size(12.0).color(INK)).extend());
+                                ui.add(egui::Label::new(RichText::new(debug::dump(&full[..full.len().min(512)])).monospace().size(12.0).color(ink())).extend());
                             });
                         });
                         if e.len > full.len() || full.len() > 512 {
-                            ui.label(RichText::new(format!("(the first {} of {} bytes)", full.len().min(512), e.len)).color(GREY));
+                            ui.label(RichText::new(format!("(the first {} of {} bytes)", full.len().min(512), e.len)).color(grey()));
                         }
                     }
                     None => {
@@ -397,7 +412,7 @@ impl crate::App {
                 ui.horizontal(|ui| {
                     ui.heading("The app's state");
                     if stop.is_some() && !self.dbg.before.is_empty() {
-                        ui.label(RichText::new(" highlighted: changed since the last stop ").color(INK).background_color(HILITE).size(12.0));
+                        ui.label(RichText::new(" highlighted: changed since the last stop ").color(ink()).background_color(hilite()).size(12.0));
                     }
                 });
                 let vw = (ui.available_width() - 250.0).max(120.0);
@@ -405,9 +420,9 @@ impl crate::App {
                     for (k, v) in &self.dbg.now_state {
                         let ticking = k.ends_with("linked") || k.ends_with("last screen") || k.ends_with("screen since");
                         let changed = stop.is_some() && !ticking && self.dbg.before.iter().find(|(bk, _)| bk == k).is_some_and(|(_, bv)| bv != v);
-                        ui.label(RichText::new(k).color(GREY));
-                        let t = RichText::new(v).monospace().color(INK);
-                        ui.add(egui::Label::new(if changed { t.background_color(HILITE).strong() } else { t }).wrap());
+                        ui.label(RichText::new(k).color(grey()));
+                        let t = RichText::new(v).monospace().color(ink());
+                        ui.add(egui::Label::new(if changed { t.background_color(hilite()).strong() } else { t }).wrap());
                         ui.end_row();
                     }
                 });
@@ -433,7 +448,7 @@ impl crate::App {
                         };
                     }
                 });
-                ui.add(egui::Label::new(RichText::new("e.g. F0 7D 46 4C 01 F7 asks which firmware · F0 7D 46 53 07 0A 01 F7 presses PLAY").color(GREY).size(12.0)).wrap());
+                ui.add(egui::Label::new(RichText::new("e.g. F0 7D 46 4C 01 F7 asks which firmware · F0 7D 46 53 07 0A 01 F7 presses PLAY").color(grey()).size(12.0)).wrap());
             });
         });
     }
@@ -454,25 +469,25 @@ fn compact(ui: &mut egui::Ui) {
     ui.style_mut().spacing.button_padding = egui::vec2(8.0, 4.0);
     ui.style_mut().spacing.interact_size.y = 22.0;
     ui.style_mut().spacing.item_spacing = egui::vec2(8.0, 6.0);
-    let mut v = egui::Visuals::light();
-    v.override_text_color = Some(INK);
-    v.panel_fill = Color32::WHITE;
-    v.window_fill = Color32::WHITE;
-    v.extreme_bg_color = Color32::from_rgb(250, 251, 252);   // inside text boxes
-    v.faint_bg_color = Color32::from_rgb(244, 246, 249);
-    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, LINE);
+    let mut v = if dark() { egui::Visuals::dark() } else { egui::Visuals::light() };
+    v.override_text_color = Some(ink());
+    v.panel_fill = paper();
+    v.window_fill = paper();
+    v.extreme_bg_color = pick((250, 251, 252), (24, 27, 33));   // inside text boxes
+    v.faint_bg_color = pick((244, 246, 249), (24, 27, 33));
+    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, line());
     // text boxes and buttons: a visible outline
-    v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(178, 186, 196));
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(240, 242, 245);
-    v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, BLUE);
-    v.selection.bg_fill = Color32::from_rgb(205, 224, 250);
-    v.selection.stroke = egui::Stroke::new(1.0_f32, BLUE);
+    v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, pick((178, 186, 196), (80, 88, 100)));
+    v.widgets.inactive.weak_bg_fill = pick((240, 242, 245), (34, 38, 46));
+    v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, blue());
+    v.selection.bg_fill = pick((205, 224, 250), (30, 60, 110));
+    v.selection.stroke = egui::Stroke::new(1.0_f32, blue());
     ui.style_mut().visuals = v;
 }
 
 /// Each panel: white, with a little room inside.
 fn panel() -> egui::Frame {
-    egui::Frame::new().fill(Color32::WHITE).inner_margin(egui::Margin::symmetric(12, 10)).stroke(egui::Stroke::new(1.0_f32, LINE))
+    egui::Frame::new().fill(paper()).inner_margin(egui::Margin::symmetric(12, 10)).stroke(egui::Stroke::new(1.0_f32, line()))
 }
 
 /// A column of the log: this wide, its text cut short to fit.
